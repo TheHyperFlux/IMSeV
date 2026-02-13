@@ -9,20 +9,13 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { 
-  getInternshipById,
-  getApplicationsByUserId,
-  addApplication, 
-  generateId,
-  addActivityLog,
-  getUsers
-} from '@/lib/storage';
-import { Application, Internship } from '@/types';
-import { useNotifications } from '@/hooks/useNotifications';
-import { 
-  CheckCircle, 
-  Loader2, 
-  Send, 
+import api from '@/lib/api';
+import { Internship } from '@/types';
+// import { useNotifications } from '@/hooks/useNotifications'; // TODO: Refactor notifications hook
+import {
+  CheckCircle,
+  Loader2,
+  Send,
   ArrowLeft,
   Briefcase,
   MapPin,
@@ -31,22 +24,24 @@ import {
   DollarSign
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
 
 export default function ApplyInternship() {
   const { internshipId } = useParams<{ internshipId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { notifyNewApplication } = useNotifications();
+  // const { notifyNewApplication } = useNotifications();
   const [internship, setInternship] = useState<Internship | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [alreadyApplied, setAlreadyApplied] = useState(false);
-  
+
   // Pre-fill form with user profile data
   const [formData, setFormData] = useState({
-    phone: user?.phone || '',
+    phone: '',
     coverLetter: '',
-    skills: user?.skills?.join(', ') || '',
+    skills: '',
     education: '',
     experience: '',
     availableFrom: '',
@@ -55,17 +50,29 @@ export default function ApplyInternship() {
   });
 
   useEffect(() => {
-    if (internshipId) {
-      const found = getInternshipById(internshipId);
-      setInternship(found || null);
-      
-      // Check if already applied
-      if (user) {
-        const existingApps = getApplicationsByUserId(user.id);
-        const hasApplied = existingApps.some(app => app.internshipId === internshipId);
+    const fetchData = async () => {
+      if (!internshipId || !user) return;
+      setIsLoading(true);
+      try {
+        // Fetch internship
+        const internshipRes = await api.get(`/internships/${internshipId}`);
+        setInternship(internshipRes.data.data);
+
+        // Check if already applied
+        // Ideally we should have an endpoint for this, or check in the applications list
+        const appsRes = await api.get('/applications');
+        const hasApplied = appsRes.data.data.some((app: any) => app.internshipId === internshipId);
         setAlreadyApplied(hasApplied);
+
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        toast.error('Failed to load internship details');
+      } finally {
+        setIsLoading(false);
       }
-    }
+    };
+
+    fetchData();
   }, [internshipId, user]);
 
   useEffect(() => {
@@ -83,7 +90,7 @@ export default function ApplyInternship() {
         return text;
       }).join('\n') || '';
 
-      const experienceText = user.experience?.map(exp => 
+      const experienceText = user.experience?.map(exp =>
         `${exp.position} at ${exp.company}${exp.description ? ': ' + exp.description : ''}`
       ).join('\n') || '';
 
@@ -100,46 +107,50 @@ export default function ApplyInternship() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !internship) return;
-    
-    setIsSubmitting(true);
-    
-    const application: Application = {
-      id: generateId(),
-      userId: user.id,
-      internshipId: internship.id,
-      name: user.name,
-      email: user.email,
-      phone: formData.phone,
-      coverLetter: formData.coverLetter,
-      skills: formData.skills.split(',').map(s => s.trim()).filter(Boolean),
-      education: formData.education,
-      experience: formData.experience,
-      preferredDepartment: internship.department,
-      availableFrom: formData.availableFrom,
-      duration: internship.duration,
-      status: 'pending',
-      appliedAt: new Date().toISOString(),
-    };
-    
-    addApplication(application);
-    
-    addActivityLog({
-      id: generateId(),
-      userId: user.id,
-      action: 'application_submitted',
-      details: `Applied for ${internship.title}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'application',
-      resourceId: application.id,
-    });
 
-    // Notify admins about new application
-    const admins = getUsers().filter(u => u.role === 'admin');
-    notifyNewApplication(admins.map(a => a.id), user.name);
-    
-    setSuccess(true);
-    setIsSubmitting(false);
+    setIsSubmitting(true);
+
+    try {
+      const payload = {
+        internshipId: internship.id,
+        name: user.name,
+        email: user.email,
+        phone: formData.phone,
+        coverLetter: formData.coverLetter,
+        skills: formData.skills.split(',').map(s => s.trim()).filter(Boolean),
+        education: formData.education,
+        experience: formData.experience,
+        preferredDepartment: internship.department,
+        availableFrom: formData.availableFrom,
+        duration: internship.duration,
+        status: 'pending',
+      };
+
+      await api.post('/applications', payload);
+
+      // Notify admins about new application (handled by backend or notification hook refactor later)
+      // const admins = getUsers().filter(u => u.role === 'admin');
+      // notifyNewApplication(admins.map(a => a.id), user.name);
+
+      setSuccess(true);
+      toast.success('Application submitted successfully!');
+    } catch (error: any) {
+      console.error('Failed to submit application:', error);
+      toast.error(error.response?.data?.error || 'Failed to submit application');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex justify-center items-center h-[50vh]">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </DashboardLayout>
+    )
+  }
 
   if (!internship) {
     return (

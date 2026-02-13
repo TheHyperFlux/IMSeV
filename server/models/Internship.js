@@ -9,23 +9,21 @@ const internshipSchema = new mongoose.Schema({
     },
     description: {
         type: String,
-        required: [true, 'Please add a description'],
         maxlength: [1000, 'Description cannot be more than 1000 characters']
     },
     department: {
-        type: String,
-        required: true
+        type: String
     },
     location: {
         type: String,
         default: 'Remote'
     },
     duration: {
-        type: String,
-        required: true
+        type: String
     },
     stipend: String,
     requirements: [String],
+    responsibilities: [String],
     slots: {
         type: Number,
         default: 1
@@ -39,7 +37,12 @@ const internshipSchema = new mongoose.Schema({
         enum: ['open', 'closed', 'upcoming'],
         default: 'open'
     },
+    startDate: Date,
     deadline: Date,
+    createdBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    },
     createdAt: {
         type: Date,
         default: Date.now

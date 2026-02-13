@@ -129,7 +129,7 @@ export interface Task {
 
 export interface DailyLog {
   id: string;
-  userId: string;
+  userId: string | { id: string; name: string };
   date: string;
   tasksCompleted: string;
   tasksPlanned: string;
@@ -145,7 +145,7 @@ export interface DailyLog {
 export interface Message {
   id: string;
   chatId: string;
-  senderId: string;
+  senderId: string | { id: string; name: string; avatar?: string };
   content: string;
   timestamp: string;
   isRead: boolean;
@@ -155,8 +155,8 @@ export interface Chat {
   id: string;
   type: 'direct' | 'group';
   name?: string;
-  participantIds: string[];
-  groupId?: string;
+  participantIds: (string | { id: string; name: string; avatar?: string })[];
+  groupId?: string | { id: string; name: string };
   lastMessage?: string;
   lastMessageAt?: string;
   createdAt: string;

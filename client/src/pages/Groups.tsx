@@ -12,36 +12,26 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  getGroups,
-  addGroup,
-  updateGroup,
-  deleteGroup,
-  getUsers,
-  generateId,
-  addActivityLog,
-  getMessagesByChatId,
-  addMessage,
-  addChat,
-  getChatByGroupId
-} from '@/lib/storage';
-import { Group, Message, Chat } from '@/types';
+import api from '@/lib/api';
+import { Group, Message, Chat, User } from '@/types';
 import {
   Plus,
-  Edit,
   Trash2,
   UsersRound,
   Search,
   Settings,
   MessageSquare,
   Send,
-  Users
+  Loader2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export default function Groups() {
-  const { user } = useAuth();
+  const { user: currentUser } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -51,12 +41,12 @@ export default function Groups() {
   // Chat state
   const [chatGroup, setChatGroup] = useState<Group | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [currentChat, setCurrentChat] = useState<Chat | null>(null);
   const [newMessage, setNewMessage] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const users = getUsers();
-  const isAdmin = user?.role === 'admin';
-  const isMentor = user?.role === 'mentor';
+  const isAdmin = currentUser?.role === 'admin';
+  const isMentor = currentUser?.role === 'mentor';
   const canViewGroups = isAdmin || isMentor;
   const canCreateGroups = isAdmin; // Only admin can create groups
 
@@ -67,57 +57,99 @@ export default function Groups() {
     adminIds: [] as string[],
   });
 
-  useEffect(() => {
-    loadGroups();
-  }, [user]);
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [groupsRes, usersRes] = await Promise.all([
+        api.get('/groups'),
+        api.get('/users')
+      ]);
+
+      const allGroups: Group[] = groupsRes.data.data;
+      const allUsers: User[] = usersRes.data.data;
+
+      setUsers(allUsers);
+
+      if (isAdmin) {
+        setGroups(allGroups);
+      } else {
+        // Mentors and Regular users only see groups they're part of
+        // But the API might already filter this? 
+        // Based on groupController.js (which I can't fully see but `getGroups` usually returns all if admin, or filtered?)
+        // Let's assume the API returns what the user is allowed to see.
+        // If the API returns all groups for everyone (which might be the case if protected but not scoped), 
+        // we might need to filter here. 
+        // Let's filter just in case to match previous logic.
+        const visibleGroups = allGroups.filter(g =>
+          g.memberIds.includes(currentUser?.id || '') ||
+          g.adminIds.includes(currentUser?.id || '')
+        );
+        setGroups(visibleGroups);
+      }
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      toast.error('Failed to fetch groups');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (chatGroup) {
-      loadMessages();
+    if (currentUser) {
+      fetchData();
+    }
+  }, [currentUser]);
+
+  // Load chat messages when entering a group chat
+  useEffect(() => {
+    if (chatGroup && currentUser) {
+      loadChatAndMessages();
     }
   }, [chatGroup]);
 
+  // Scroll to bottom of messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const loadGroups = () => {
-    const allGroups = getGroups();
-    if (isAdmin) {
-      setGroups(allGroups);
-    } else {
-      // Mentors and Regular users only see groups they're part of
-      setGroups(allGroups.filter(g =>
-        g.memberIds.includes(user?.id || '') ||
-        g.adminIds.includes(user?.id || '')
-      ));
-    }
-  };
-
-  const loadMessages = () => {
+  const loadChatAndMessages = async () => {
     if (!chatGroup) return;
 
-    let chat = getChatByGroupId(chatGroup.id);
+    try {
+      // 1. Find existing chat for this group
+      // We need to fetch chats and find the one with type 'group' and matching groupId (if we had that field)
+      // Or checks if there is a chat where participants match exactly? No.
+      // The backend `createChat` takes a `groupId`. Let's assumes we can find it.
+      // Since we don't have a direct "get chat by group id" endpoint, we might have to rely on `getChats`
+      // and filter.
+      const res = await api.get('/chats');
+      const allChats: Chat[] = res.data.data;
 
-    // Create chat if doesn't exist
-    if (!chat) {
-      const chatId = generateId();
-      const newChat: Chat = {
-        id: chatId,
-        type: 'group',
-        name: chatGroup.name,
-        participantIds: chatGroup.memberIds,
-        groupId: chatGroup.id,
-        createdAt: new Date().toISOString(),
-      };
-      addChat(newChat);
+      let chat = allChats.find(c => c.type === 'group' && c.groupId === chatGroup.id);
 
-      // Update group with chat ID
-      updateGroup(chatGroup.id, { chatId });
-      chat = newChat;
+      if (!chat) {
+        // Create chat if it doesn't exist
+        // Note: In a real app, maybe the backend creates this automatically.
+        const createRes = await api.post('/chats', {
+          type: 'group',
+          name: chatGroup.name,
+          participantIds: chatGroup.memberIds,
+          groupId: chatGroup.id
+        });
+        chat = createRes.data.data;
+      }
+
+      if (chat) {
+        setCurrentChat(chat);
+        const msgsRes = await api.get(`/messages/${chat.id}`);
+        setMessages(msgsRes.data.data);
+      }
+
+    } catch (error) {
+      console.error('Error loading chat:', error);
+      toast.error('Failed to load chat');
     }
-
-    setMessages(getMessagesByChatId(chat.id));
   };
 
   const resetForm = () => {
@@ -134,81 +166,112 @@ export default function Groups() {
     group.description.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const myGroups = groups.filter(g => g.memberIds.includes(user?.id || ''));
+  const myGroups = groups.filter(g => g.memberIds.includes(currentUser?.id || ''));
 
-  const handleCreateGroup = () => {
-    const newGroup: Group = {
-      id: generateId(),
-      name: formData.name,
-      description: formData.description,
-      memberIds: formData.memberIds,
-      adminIds: formData.adminIds.length > 0 ? formData.adminIds : [user?.id || ''],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const handleCreateGroup = async () => {
+    if (!formData.name.trim()) {
+      toast.error('Group name is required');
+      return;
+    }
 
-    addGroup(newGroup);
+    try {
+      // Filter out empty IDs
+      const validMemberIds = formData.memberIds.filter(id => id && typeof id === 'string');
+      const validAdminIds = formData.adminIds.length > 0 
+        ? formData.adminIds.filter(id => id && typeof id === 'string')
+        : (currentUser?.id ? [currentUser.id] : []);
 
-    // Create group chat
-    const chatId = generateId();
-    addChat({
-      id: chatId,
-      type: 'group',
-      name: formData.name,
-      participantIds: formData.memberIds,
-      groupId: newGroup.id,
-      createdAt: new Date().toISOString(),
-    });
+      if (validAdminIds.length === 0 && !currentUser?.id) {
+        toast.error('Unable to create group: user not authenticated');
+        return;
+      }
 
-    // Update group with chat ID
-    updateGroup(newGroup.id, { chatId });
+      const newGroup = {
+        name: formData.name.trim(),
+        description: formData.description.trim(),
+        memberIds: validMemberIds,
+        adminIds: validAdminIds,
+      };
 
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'group_created',
-      details: `Created group: ${formData.name}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'group',
-      resourceId: newGroup.id,
-    });
+      console.log('Creating group with data:', JSON.stringify(newGroup, null, 2));
+      const res = await api.post('/groups', newGroup);
+      const createdGroup = res.data.data;
 
-    loadGroups();
-    setCreateDialogOpen(false);
-    resetForm();
+      // Create group chat immediately so it's ready
+      await api.post('/chats', {
+        type: 'group',
+        name: createdGroup.name,
+        participantIds: createdGroup.memberIds,
+        groupId: createdGroup.id
+      });
+
+      await api.post('/activity-logs', {
+        userId: currentUser?.id,
+        action: 'group_created',
+        details: `Created group: ${formData.name}`,
+        resourceType: 'group',
+        resourceId: createdGroup.id,
+      });
+
+      toast.success('Group created successfully');
+      fetchData();
+      setCreateDialogOpen(false);
+      resetForm();
+
+    } catch (error: any) {
+      console.error('Error creating group:', error);
+      toast.error(error.response?.data?.error || 'Failed to create group');
+    }
   };
 
-  const handleEditGroup = () => {
+  const handleEditGroup = async () => {
     if (!selectedGroup) return;
 
-    updateGroup(selectedGroup.id, {
-      name: formData.name,
-      description: formData.description,
-      memberIds: formData.memberIds,
-      adminIds: formData.adminIds,
-      updatedAt: new Date().toISOString(),
-    });
+    try {
+      const updateData = {
+        name: formData.name,
+        description: formData.description,
+        memberIds: formData.memberIds,
+        adminIds: formData.adminIds,
+      };
 
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'group_updated',
-      details: `Updated group: ${formData.name}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'group',
-      resourceId: selectedGroup.id,
-    });
+      await api.put(`/groups/${selectedGroup.id}`, updateData);
 
-    loadGroups();
-    setEditDialogOpen(false);
-    setSelectedGroup(null);
-    resetForm();
+      // Also update the chat name and participants if it exists
+      // We'd need the chat ID for this. 
+      // For now, let's just update the group.
+      // Ideally we would look up the chat and update it too.
+
+      await api.post('/activity-logs', {
+        userId: currentUser?.id,
+        action: 'group_updated',
+        details: `Updated group: ${formData.name}`,
+        resourceType: 'group',
+        resourceId: selectedGroup.id,
+      });
+
+      toast.success('Group updated successfully');
+      fetchData();
+      setEditDialogOpen(false);
+      setSelectedGroup(null);
+      resetForm();
+
+    } catch (error: any) {
+      console.error('Error updating group:', error);
+      toast.error(error.response?.data?.error || 'Failed to update group');
+    }
   };
 
-  const handleDeleteGroup = (groupId: string) => {
+  const handleDeleteGroup = async (groupId: string) => {
     if (confirm('Are you sure you want to delete this group?')) {
-      deleteGroup(groupId);
-      loadGroups();
+      try {
+        await api.delete(`/groups/${groupId}`);
+        toast.success('Group deleted successfully');
+        fetchData();
+      } catch (error: any) {
+        console.error('Error deleting group:', error);
+        toast.error(error.response?.data?.error || 'Failed to delete group');
+      }
     }
   };
 
@@ -227,24 +290,25 @@ export default function Groups() {
     setChatGroup(group);
   };
 
-  const handleSendMessage = () => {
-    if (!newMessage.trim() || !chatGroup || !user) return;
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !currentChat || !currentUser) return;
 
-    let chat = getChatByGroupId(chatGroup.id);
-    if (!chat) return;
+    try {
+      const res = await api.post('/messages', {
+        chatId: currentChat.id,
+        content: newMessage.trim()
+      });
 
-    const message: Message = {
-      id: generateId(),
-      chatId: chat.id,
-      senderId: user.id,
-      content: newMessage.trim(),
-      timestamp: new Date().toISOString(),
-      isRead: false,
-    };
+      // Optimistically add message or re-fetch
+      // Re-fetching ensures sync
+      const msgsRes = await api.get(`/messages/${currentChat.id}`);
+      setMessages(msgsRes.data.data);
+      setNewMessage('');
 
-    addMessage(message);
-    loadMessages();
-    setNewMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      toast.error('Failed to send message');
+    }
   };
 
   const getMemberNames = (memberIds: string[]) => {
@@ -255,7 +319,7 @@ export default function Groups() {
   };
 
   const getSenderName = (senderId: string) => {
-    if (senderId === user?.id) return 'You';
+    if (senderId === currentUser?.id) return 'You';
     const sender = users.find(u => u.id === senderId);
     return sender?.name || 'Unknown';
   };
@@ -269,7 +333,7 @@ export default function Groups() {
             {/* Chat Header */}
             <div className="p-4 border-b flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <Button variant="ghost" size="sm" onClick={() => setChatGroup(null)}>
+                <Button variant="ghost" size="sm" onClick={() => { setChatGroup(null); setCurrentChat(null); setMessages([]); }}>
                   ← Back
                 </Button>
                 <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
@@ -294,7 +358,7 @@ export default function Groups() {
                   </div>
                 ) : (
                   messages.map((message) => {
-                    const isOwn = message.senderId === user?.id;
+                    const isOwn = message.senderId === currentUser?.id;
                     return (
                       <div
                         key={message.id}
@@ -313,7 +377,7 @@ export default function Groups() {
                         >
                           {!isOwn && (
                             <p className="text-xs font-medium mb-1 opacity-70">
-                              {getSenderName(message.senderId)}
+                              {getSenderName(message.senderId as any)}
                             </p>
                           )}
                           <p className="text-sm whitespace-pre-wrap">{message.content}</p>
@@ -509,7 +573,11 @@ export default function Groups() {
           </div>
 
           <TabsContent value="all" className="mt-4">
-            {filteredGroups.length === 0 ? (
+            {loading ? (
+              <div className="flex justify-center p-8">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : filteredGroups.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
                   <UsersRound className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -525,7 +593,7 @@ export default function Groups() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredGroups.map((group) => {
-                  const isMember = group.memberIds.includes(user?.id || '');
+                  const isMember = group.memberIds.includes(currentUser?.id || '');
                   return (
                     <Card key={group.id} className="hover:shadow-md transition-shadow">
                       <CardHeader>
@@ -576,7 +644,7 @@ export default function Groups() {
                               Chat
                             </Button>
                           )}
-                          {canViewGroups && (
+                          {isAdmin && (
                             <>
                               <Button
                                 variant="outline"

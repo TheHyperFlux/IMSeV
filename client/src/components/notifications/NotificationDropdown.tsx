@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Bell, Check, CheckCheck, ExternalLink } from 'lucide-react';
+import { Bell, CheckCheck, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAuth } from '@/contexts/AuthContext';
-import { getNotificationsByUserId, markNotificationAsRead, getNotifications, setNotifications } from '@/lib/storage';
+import api from '@/lib/api';
 import { Notification } from '@/types';
 import { formatDistanceToNow } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
@@ -21,36 +21,55 @@ import { cn } from '@/lib/utils';
 export function NotificationDropdown() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [notifications, setLocalNotifications] = useState<Notification[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
 
+  // Poll for notifications every 30 seconds or refresh on open
   useEffect(() => {
-    if (user) {
-      const userNotifications = getNotificationsByUserId(user.id);
-      setLocalNotifications(userNotifications);
+    const fetchNotifications = async () => {
+      if (!user) return;
+      try {
+        const res = await api.get('/notifications');
+        setNotifications(res.data.data);
+      } catch (error) {
+        console.error('Error fetching notifications:', error);
+      }
+    };
+
+    fetchNotifications();
+
+    const interval = setInterval(fetchNotifications, 30000); // Poll every 30s
+    if (open) {
+      fetchNotifications();
     }
+
+    return () => clearInterval(interval);
   }, [user, open]);
 
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
-  const handleNotificationClick = (notification: Notification) => {
-    markNotificationAsRead(notification.id);
-    setLocalNotifications(prev => 
-      prev.map(n => n.id === notification.id ? { ...n, isRead: true } : n)
-    );
-    if (notification.link) {
-      navigate(notification.link);
-      setOpen(false);
+  const handleNotificationClick = async (notification: Notification) => {
+    try {
+      await api.put(`/notifications/${notification.id}/read`);
+      setNotifications(prev =>
+        prev.map(n => n.id === notification.id ? { ...n, isRead: true } : n)
+      );
+      if (notification.link) {
+        navigate(notification.link);
+        setOpen(false);
+      }
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
     }
   };
 
-  const markAllAsRead = () => {
-    const allNotifications = getNotifications();
-    const updated = allNotifications.map(n => 
-      n.userId === user?.id ? { ...n, isRead: true } : n
-    );
-    setNotifications(updated);
-    setLocalNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+  const markAllAsRead = async () => {
+    try {
+      await api.put('/notifications/read-all');
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+    }
   };
 
   const getNotificationIcon = (type: Notification['type']) => {
@@ -72,8 +91,8 @@ export function NotificationDropdown() {
         <Button variant="ghost" size="icon" className="relative">
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
-            <Badge 
-              variant="destructive" 
+            <Badge
+              variant="destructive"
               className="absolute -right-1 -top-1 h-5 w-5 rounded-full p-0 text-xs flex items-center justify-center"
             >
               {unreadCount > 9 ? '9+' : unreadCount}
@@ -85,11 +104,14 @@ export function NotificationDropdown() {
         <DropdownMenuLabel className="flex items-center justify-between">
           <span>Notifications</span>
           {unreadCount > 0 && (
-            <Button 
-              variant="ghost" 
-              size="sm" 
+            <Button
+              variant="ghost"
+              size="sm"
               className="h-auto p-1 text-xs"
-              onClick={markAllAsRead}
+              onClick={(e) => {
+                e.stopPropagation();
+                markAllAsRead();
+              }}
             >
               <CheckCheck className="mr-1 h-3 w-3" />
               Mark all read

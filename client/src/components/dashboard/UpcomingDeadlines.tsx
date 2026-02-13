@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { getTasks, getProjects, getTasksByAssigneeId } from '@/lib/storage';
+import api from '@/lib/api';
 import { Task, Project } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { format, isAfter, isBefore, addDays } from 'date-fns';
-import { Clock, AlertTriangle } from 'lucide-react';
+import { Clock, AlertTriangle, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface DeadlineItem {
@@ -21,58 +21,77 @@ interface DeadlineItem {
 export function UpcomingDeadlines() {
   const { user } = useAuth();
   const [deadlines, setDeadlines] = useState<DeadlineItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (!user) return;
+    const fetchData = async () => {
+      if (!user) return;
+      setIsLoading(true);
 
-    const items: DeadlineItem[] = [];
-    const now = new Date();
-    const twoWeeksFromNow = addDays(now, 14);
+      try {
+        const items: DeadlineItem[] = [];
+        const now = new Date();
+        const twoWeeksFromNow = addDays(now, 14);
 
-    // Get relevant tasks
-    let tasks: Task[] = [];
-    if (user.role === 'admin' || user.role === 'mentor') {
-      tasks = getTasks();
-    } else {
-      tasks = getTasksByAssigneeId(user.id);
-    }
+        // Fetch tasks and projects in parallel
+        const [tasksRes, projectsRes] = await Promise.all([
+          api.get('/tasks'),
+          api.get('/projects')
+        ]);
 
-    tasks.forEach(task => {
-      if (task.dueDate && task.status !== 'completed') {
-        const dueDate = new Date(task.dueDate);
-        if (isBefore(dueDate, twoWeeksFromNow)) {
-          items.push({
-            id: task.id,
-            title: task.title,
-            dueDate: task.dueDate,
-            type: 'task',
-            priority: task.priority,
-            isOverdue: isBefore(dueDate, now)
-          });
+        const allTasks: Task[] = tasksRes.data.data;
+        const allProjects: Project[] = projectsRes.data.data;
+
+        // Filter tasks
+        let relevantTasks = allTasks;
+        if (user.role !== 'admin' && user.role !== 'mentor') {
+          relevantTasks = allTasks.filter(t => t.assigneeId === user.id);
         }
-      }
-    });
 
-    // Get relevant projects
-    const projects = getProjects();
-    projects.forEach(project => {
-      if (project.endDate && project.status !== 'completed') {
-        const endDate = new Date(project.endDate);
-        if (isBefore(endDate, twoWeeksFromNow)) {
-          items.push({
-            id: project.id,
-            title: project.name,
-            dueDate: project.endDate,
-            type: 'project',
-            isOverdue: isBefore(endDate, now)
-          });
-        }
-      }
-    });
+        relevantTasks.forEach(task => {
+          if (task.dueDate && task.status !== 'completed') {
+            const dueDate = new Date(task.dueDate);
+            if (isBefore(dueDate, twoWeeksFromNow)) {
+              items.push({
+                id: task.id,
+                title: task.title,
+                dueDate: task.dueDate,
+                type: 'task',
+                priority: task.priority,
+                isOverdue: isBefore(dueDate, now)
+              });
+            }
+          }
+        });
 
-    // Sort by date
-    items.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-    setDeadlines(items.slice(0, 5));
+        // Filter projects
+        // Assuming everyone can see projects or filter if needed
+        allProjects.forEach(project => {
+          if (project.endDate && project.status !== 'completed') {
+            const endDate = new Date(project.endDate);
+            if (isBefore(endDate, twoWeeksFromNow)) {
+              items.push({
+                id: project.id,
+                title: project.name,
+                dueDate: project.endDate,
+                type: 'project',
+                isOverdue: isBefore(endDate, now)
+              });
+            }
+          }
+        });
+
+        // Sort by date
+        items.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+        setDeadlines(items.slice(0, 5));
+      } catch (error) {
+        console.error('Failed to fetch deadlines:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
   }, [user]);
 
   const getPriorityColor = (priority?: string) => {
@@ -98,15 +117,19 @@ export function UpcomingDeadlines() {
       </CardHeader>
       <CardContent>
         <ScrollArea className="h-[200px]">
-          {deadlines.length === 0 ? (
+          {isLoading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : deadlines.length === 0 ? (
             <p className="text-center text-sm text-muted-foreground py-8">
               No upcoming deadlines
             </p>
           ) : (
             <div className="space-y-3">
               {deadlines.map((item) => (
-                <div 
-                  key={item.id} 
+                <div
+                  key={item.id}
                   className={cn(
                     "flex items-center justify-between p-2 rounded-lg",
                     item.isOverdue && "bg-red-50 dark:bg-red-900/10"

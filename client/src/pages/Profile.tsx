@@ -110,54 +110,85 @@ export default function Profile() {
     setIsEditing(false);
   };
 
-  const handleAddEducation = () => {
+  const handleAddEducation = async () => {
+    // Only Institution and Degree are mandatory
+    if (!educationForm.institution || !educationForm.degree) {
+      toast.error('Please fill in institution and degree');
+      return;
+    }
+
     const newEducation = [...(user?.education || []), educationForm];
-    updateProfile({ 
-      education: newEducation,
-      profileCompleted: isProfileComplete({ ...user!, education: newEducation }),
-    });
-    setEducationDialogOpen(false);
-    setEducationForm({
-      institution: '',
-      degree: 'SEE',
-      field: '',
-      gpa: '',
-      yearPassed: '',
-      semester: '',
-      year: '',
-      current: false,
-    });
-    toast.success('Education added successfully');
+    try {
+      await updateProfile({ 
+        education: newEducation,
+        profileCompleted: isProfileComplete({ ...user!, education: newEducation }),
+      });
+      setEducationDialogOpen(false);
+      setEducationForm({
+        institution: '',
+        degree: 'SEE',
+        field: '',
+        gpa: '',
+        yearPassed: '',
+        semester: '',
+        year: '',
+        current: false,
+      });
+      toast.success('Education added successfully');
+    } catch (error) {
+      console.error('Failed to add education:', error);
+      toast.error('Failed to add education. Please try again.');
+    }
   };
 
-  const handleRemoveEducation = (index: number) => {
+  const handleRemoveEducation = async (index: number) => {
     const newEducation = user?.education?.filter((_, i) => i !== index) || [];
-    updateProfile({ 
-      education: newEducation,
-      profileCompleted: isProfileComplete({ ...user!, education: newEducation }),
-    });
-    toast.success('Education removed');
+    try {
+      await updateProfile({ 
+        education: newEducation,
+        profileCompleted: isProfileComplete({ ...user!, education: newEducation }),
+      });
+      toast.success('Education removed');
+    } catch (error) {
+      console.error('Failed to remove education:', error);
+      toast.error('Failed to remove education. Please try again.');
+    }
   };
 
-  const handleAddExperience = () => {
+  const handleAddExperience = async () => {
+    if (!experienceForm.company || !experienceForm.position) {
+      toast.error('Please fill in company and position');
+      return;
+    }
+    
     const newExperience = [...(user?.experience || []), experienceForm];
-    updateProfile({ experience: newExperience });
-    setExperienceDialogOpen(false);
-    setExperienceForm({
-      company: '',
-      position: '',
-      description: '',
-      startDate: '',
-      endDate: '',
-      current: false,
-    });
-    toast.success('Experience added successfully');
+    try {
+      await updateProfile({ experience: newExperience });
+      setExperienceDialogOpen(false);
+      setExperienceForm({
+        company: '',
+        position: '',
+        description: '',
+        startDate: '',
+        endDate: '',
+        current: false,
+      });
+      toast.success('Experience added successfully');
+    } catch (error) {
+      console.error('Failed to add experience:', error);
+      toast.error('Failed to add experience. Please try again.');
+    }
   };
 
-  const handleRemoveExperience = (index: number) => {
+  const handleRemoveExperience = async (index: number) => {
     const newExperience = user?.experience?.filter((_, i) => i !== index) || [];
-    updateProfile({ experience: newExperience });
-    toast.success('Experience removed');
+    try {
+      await updateProfile({ experience: newExperience });
+      toast.success('Experience removed');
+    } catch (error) {
+      console.error('Failed to remove experience:', error);
+      toast.error('Failed to remove experience. Please try again.');
+    }
   };
 
   return (

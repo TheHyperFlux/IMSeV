@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,17 +9,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import {
-  getProjects,
-  addProject,
-  updateProject,
-  deleteProject,
-  getUsers,
-  getGroups,
-  generateId,
-  addActivityLog
-} from '@/lib/storage';
-import { Project, ProjectStatus } from '@/types';
+import api from '@/lib/api';
+import { Project, ProjectStatus, User, Group } from '@/types';
 import {
   Plus,
   Edit,
@@ -27,8 +18,10 @@ import {
   FolderKanban,
   Calendar,
   Users,
-  Search
+  Search,
+  Loader2
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const statusColors: Record<ProjectStatus, string> = {
   planning: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
@@ -47,59 +40,15 @@ const defaultDepartments = [
 ];
 
 export default function Projects() {
-  const { user } = useAuth();
-
-  const getVisibleProjects = () => {
-    const allProjects = getProjects();
-    if (!user || user.role === 'admin') {
-      return allProjects;
-    }
-
-    if (user.role === 'mentor') {
-      const groups = getGroups().filter(g =>
-        g.adminIds.includes(user.id) || g.memberIds.includes(user.id)
-      );
-      const groupIds = groups.map(g => g.id);
-
-      return allProjects.filter(p =>
-        p.mentorId === user.id ||
-        (p.groupId && groupIds.includes(p.groupId))
-      );
-    }
-
-    // Interns only see projects they are assigned to
-    if (user.role === 'intern') {
-      return allProjects.filter(p =>
-        p.internIds.includes(user.id)
-      );
-    }
-
-    return [];
-  };
-
-  const [projects, setProjects] = useState<Project[]>(getVisibleProjects());
+  const { user: currentUser } = useAuth();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-
-  const users = getUsers();
-  const mentors = users.filter(u => u.role === 'mentor' || u.role === 'admin');
-
-  // Filter interns based on role
-  const getAvailableInterns = () => {
-    const allInterns = users.filter(u => u.role === 'intern');
-    if (user?.role === 'mentor') {
-      const groups = getGroups().filter(g =>
-        g.adminIds.includes(user.id) || g.memberIds.includes(user.id)
-      );
-      const memberIds = new Set(groups.flatMap(g => g.memberIds));
-      return allInterns.filter(u => memberIds.has(u.id));
-    }
-    return allInterns;
-  };
-
-  const interns = getAvailableInterns();
 
   const [formData, setFormData] = useState({
     name: '',
@@ -111,6 +60,78 @@ export default function Projects() {
     mentorId: '',
     internIds: [] as string[],
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [projectsRes, usersRes, groupsRes] = await Promise.all([
+        api.get('/projects'),
+        api.get('/users'),
+        api.get('/groups')
+      ]);
+
+      let allProjects: Project[] = projectsRes.data.data;
+      const allUsers: User[] = usersRes.data.data;
+      const allGroups: Group[] = groupsRes.data.data;
+
+      setUsers(allUsers);
+      setGroups(allGroups);
+
+      // Filter projects based on role
+      if (currentUser) {
+        if (currentUser.role === 'admin') {
+          setProjects(allProjects);
+        } else if (currentUser.role === 'mentor') {
+          const mentorGroups = allGroups.filter(g =>
+            g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
+          );
+          const groupIds = mentorGroups.map(g => g.id);
+
+          const visibleProjects = allProjects.filter(p =>
+            p.mentorId === currentUser.id ||
+            (p.groupId && groupIds.includes(p.groupId))
+          );
+          setProjects(visibleProjects);
+        } else if (currentUser.role === 'intern') {
+          const visibleProjects = allProjects.filter(p =>
+            p.internIds.includes(currentUser.id)
+          );
+          setProjects(visibleProjects);
+        } else {
+          setProjects([]);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      toast.error('Failed to fetch projects');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchData();
+    }
+  }, [currentUser]);
+
+  const mentors = users.filter(u => u.role === 'mentor' || u.role === 'admin');
+
+  // Filter interns based on role logic
+  const getAvailableInterns = () => {
+    const allInterns = users.filter(u => u.role === 'intern');
+    if (currentUser?.role === 'mentor') {
+      const relevantGroups = groups.filter(g =>
+        g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
+      );
+      const memberIds = new Set(relevantGroups.flatMap(g => g.memberIds));
+      return allInterns.filter(u => memberIds.has(u.id));
+    }
+    return allInterns; // Admins see all
+  };
+
+  const interns = getAvailableInterns(); // Not used directly in form currently, but logic kept
 
   const resetForm = () => {
     setFormData({
@@ -130,73 +151,87 @@ export default function Projects() {
     project.department.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleCreateProject = () => {
-    const newProject: Project = {
-      id: generateId(),
-      name: formData.name,
-      description: formData.description,
-      department: formData.department,
-      status: formData.status,
-      startDate: formData.startDate,
-      endDate: formData.endDate || undefined,
-      mentorId: formData.mentorId,
-      internIds: formData.internIds,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const handleCreateProject = async () => {
+    try {
+      const newProject = {
+        name: formData.name,
+        description: formData.description,
+        department: formData.department,
+        status: formData.status,
+        startDate: formData.startDate,
+        endDate: formData.endDate || undefined,
+        mentorId: formData.mentorId,
+        internIds: formData.internIds,
+      };
 
-    addProject(newProject);
+      const res = await api.post('/projects', newProject);
 
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'project_created',
-      details: `Created project: ${formData.name}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'project',
-      resourceId: newProject.id,
-    });
+      await api.post('/activity-logs', {
+        userId: currentUser?.id,
+        action: 'project_created',
+        details: `Created project: ${formData.name}`,
+        resourceType: 'project',
+        resourceId: res.data.data.id,
+      });
 
-    setProjects(getVisibleProjects());
-    setCreateDialogOpen(false);
-    resetForm();
+      toast.success('Project created successfully');
+      fetchData();
+      setCreateDialogOpen(false);
+      resetForm();
+
+    } catch (error: any) {
+      console.error('Error creating project:', error);
+      toast.error(error.response?.data?.error || 'Failed to create project');
+    }
   };
 
-  const handleEditProject = () => {
+  const handleEditProject = async () => {
     if (!selectedProject) return;
 
-    updateProject(selectedProject.id, {
-      name: formData.name,
-      description: formData.description,
-      department: formData.department,
-      status: formData.status,
-      startDate: formData.startDate,
-      endDate: formData.endDate || undefined,
-      mentorId: formData.mentorId,
-      internIds: formData.internIds,
-      updatedAt: new Date().toISOString(),
-    });
+    try {
+      const updateData = {
+        name: formData.name,
+        description: formData.description,
+        department: formData.department,
+        status: formData.status,
+        startDate: formData.startDate,
+        endDate: formData.endDate || undefined,
+        mentorId: formData.mentorId,
+        internIds: formData.internIds,
+      };
 
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'project_updated',
-      details: `Updated project: ${formData.name}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'project',
-      resourceId: selectedProject.id,
-    });
+      await api.put(`/projects/${selectedProject.id}`, updateData);
 
-    setProjects(getVisibleProjects());
-    setEditDialogOpen(false);
-    setSelectedProject(null);
-    resetForm();
+      await api.post('/activity-logs', {
+        userId: currentUser?.id,
+        action: 'project_updated',
+        details: `Updated project: ${formData.name}`,
+        resourceType: 'project',
+        resourceId: selectedProject.id,
+      });
+
+      toast.success('Project updated successfully');
+      fetchData();
+      setEditDialogOpen(false);
+      setSelectedProject(null);
+      resetForm();
+
+    } catch (error: any) {
+      console.error('Error updating project:', error);
+      toast.error(error.response?.data?.error || 'Failed to update project');
+    }
   };
 
-  const handleDeleteProject = (projectId: string) => {
+  const handleDeleteProject = async (projectId: string) => {
     if (confirm('Are you sure you want to delete this project?')) {
-      deleteProject(projectId);
-      setProjects(getVisibleProjects());
+      try {
+        await api.delete(`/projects/${projectId}`);
+        toast.success('Project deleted successfully');
+        fetchData();
+      } catch (error: any) {
+        console.error('Error deleting project:', error);
+        toast.error(error.response?.data?.error || 'Failed to delete project');
+      }
     }
   };
 
@@ -207,8 +242,8 @@ export default function Projects() {
       description: project.description,
       department: project.department,
       status: project.status,
-      startDate: project.startDate,
-      endDate: project.endDate || '',
+      startDate: project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : '', // Format for date input
+      endDate: project.endDate ? new Date(project.endDate).toISOString().split('T')[0] : '',
       mentorId: project.mentorId,
       internIds: project.internIds,
     });
@@ -220,7 +255,7 @@ export default function Projects() {
     return mentor?.name || 'Unassigned';
   };
 
-  const isAdminOrMentor = user?.role === 'admin' || user?.role === 'mentor';
+  const isAdminOrMentor = currentUser?.role === 'admin' || currentUser?.role === 'mentor';
 
   return (
     <DashboardLayout>
@@ -362,7 +397,11 @@ export default function Projects() {
           />
         </div>
 
-        {filteredProjects.length === 0 ? (
+        {loading ? (
+          <div className="flex justify-center p-8">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : filteredProjects.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center">
               <FolderKanban className="h-12 w-12 mx-auto text-muted-foreground mb-4" />

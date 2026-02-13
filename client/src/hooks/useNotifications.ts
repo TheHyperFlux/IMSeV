@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { addNotification, generateId } from '@/lib/storage';
+import api from '@/lib/api';
 import { Notification } from '@/types';
 
 type NotificationType = 'info' | 'success' | 'warning' | 'error';
@@ -13,23 +13,23 @@ interface CreateNotificationParams {
 }
 
 export function useNotifications() {
-  const createNotification = useCallback((params: CreateNotificationParams) => {
-    const notification: Notification = {
-      id: generateId(),
-      userId: params.userId,
-      title: params.title,
-      message: params.message,
-      type: params.type || 'info',
-      isRead: false,
-      createdAt: new Date().toISOString(),
-      link: params.link,
-    };
-    addNotification(notification);
-    return notification;
+  const createNotification = useCallback(async (params: CreateNotificationParams) => {
+    try {
+      const res = await api.post('/notifications', {
+        userId: params.userId,
+        title: params.title,
+        message: params.message,
+        type: params.type || 'info',
+        link: params.link,
+      });
+      return res.data.data;
+    } catch (error) {
+      console.error('Error creating notification:', error);
+    }
   }, []);
 
   const notifyApplicationStatusChange = useCallback((
-    userId: string, 
+    userId: string,
     applicationStatus: string
   ) => {
     const statusMessages: Record<string, { title: string; message: string; type: NotificationType }> = {

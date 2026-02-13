@@ -30,9 +30,41 @@ const userSchema = new mongoose.Schema({
     skills: [String],
     bio: String,
     phone: String,
+    education: [{
+        institution: String,
+        degree: {
+            type: String,
+            enum: ['SEE', 'Higher Secondary', 'Bachelor'],
+            default: 'SEE'
+        },
+        field: String,
+        gpa: String,
+        yearPassed: String,
+        semester: String,
+        year: String,
+        current: {
+            type: Boolean,
+            default: false
+        }
+    }],
+    experience: [{
+        company: String,
+        position: String,
+        description: String,
+        startDate: String,
+        endDate: String,
+        current: {
+            type: Boolean,
+            default: false
+        }
+    }],
     isActive: {
         type: Boolean,
         default: true
+    },
+    joinedAt: {
+        type: Date,
+        default: Date.now
     },
     createdAt: {
         type: Date,

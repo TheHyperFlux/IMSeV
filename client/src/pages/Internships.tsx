@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -10,15 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import {
-  getInternships,
-  addInternship,
-  updateInternship,
-  deleteInternship,
-  generateId,
-  addActivityLog,
-  getApplicationsByInternshipId
-} from '@/lib/storage';
+import api from '@/lib/api';
 import { Internship, InternshipStatus } from '@/types';
 import {
   Plus,
@@ -31,10 +23,38 @@ import {
   Users,
   Briefcase,
   DollarSign,
-  ArrowRight
+  ArrowRight,
+  Loader2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
+
+// Inject slide-in animation styles
+if (typeof document !== 'undefined') {
+  const styleId = 'internship-slide-in-animation';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      
+      .slide-in {
+        animation: slideIn 0.5s ease-out forwards;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
 
 const defaultDepartments = [
   'Engineering',
@@ -44,6 +64,8 @@ const defaultDepartments = [
   'Data Science',
   'Operations',
   'Human Resources',
+  'IT',
+  'Other',
 ];
 
 interface InternshipFormData {
@@ -105,7 +127,7 @@ const FormDialog = ({ formData, setFormData, isAdmin, isEdit = false }: FormDial
       </div>
     </div>
     <div className="space-y-2">
-      <Label htmlFor="description">Description</Label>
+      <Label htmlFor="description">Description *</Label>
       <Textarea
         id="description"
         value={formData.description}
@@ -116,7 +138,7 @@ const FormDialog = ({ formData, setFormData, isAdmin, isEdit = false }: FormDial
     </div>
     <div className="grid grid-cols-2 gap-4">
       <div className="space-y-2">
-        <Label htmlFor="duration">Duration</Label>
+        <Label htmlFor="duration">Duration *</Label>
         <Input
           id="duration"
           value={formData.duration}
@@ -129,7 +151,7 @@ const FormDialog = ({ formData, setFormData, isAdmin, isEdit = false }: FormDial
         <Input
           id="startDate"
           type="date"
-          value={formData.startDate}
+          value={formData.startDate ? formData.startDate.split('T')[0] : ''}
           onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
         />
       </div>
@@ -140,7 +162,7 @@ const FormDialog = ({ formData, setFormData, isAdmin, isEdit = false }: FormDial
         <Input
           id="deadline"
           type="date"
-          value={formData.deadline}
+          value={formData.deadline ? formData.deadline.split('T')[0] : ''}
           onChange={(e) => setFormData({ ...formData, deadline: e.target.value })}
         />
       </div>
@@ -209,11 +231,13 @@ const FormDialog = ({ formData, setFormData, isAdmin, isEdit = false }: FormDial
 export default function Internships() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [internships, setInternships] = useState<Internship[]>(getInternships());
+  const [internships, setInternships] = useState<Internship[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedInternship, setSelectedInternship] = useState<Internship | null>(null);
+  const [showAllInternships, setShowAllInternships] = useState(false);
 
   const isAdmin = user?.role === 'admin';
 
@@ -231,6 +255,23 @@ export default function Internships() {
     slots: 1,
     status: 'open',
   });
+
+  const fetchInternships = async () => {
+    setIsLoading(true);
+    try {
+      const res = await api.get('/internships');
+      setInternships(res.data.data);
+    } catch (error) {
+      console.error('Failed to fetch internships:', error);
+      toast.error('Failed to load internships');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchInternships();
+  }, []);
 
   const resetForm = () => {
     setFormData({
@@ -265,78 +306,83 @@ export default function Internships() {
       );
     }
 
-    return filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  };
-
-  const handleCreateInternship = () => {
-    if (!formData.title || !formData.department) return;
-
-    const newInternship: Internship = {
-      id: generateId(),
-      title: formData.title,
-      description: formData.description,
-      department: formData.department,
-      location: formData.location,
-      duration: formData.duration,
-      startDate: formData.startDate,
-      deadline: formData.deadline || undefined,
-      requirements: formData.requirements.split('\n').filter(Boolean),
-      responsibilities: formData.responsibilities.split('\n').filter(Boolean),
-      stipend: formData.stipend || undefined,
-      slots: formData.slots,
-      filledSlots: 0,
-      status: formData.status,
-      createdBy: user?.id || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    addInternship(newInternship);
-
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'internship_created',
-      details: `Created internship: ${formData.title}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'internship',
-      resourceId: newInternship.id,
+    // Sort: Open first, then by creation date
+    return filtered.sort((a, b) => {
+      if (a.status === 'open' && b.status !== 'open') return -1;
+      if (a.status !== 'open' && b.status === 'open') return 1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
-
-    setInternships(getInternships());
-    setCreateDialogOpen(false);
-    resetForm();
   };
 
-  const handleEditInternship = () => {
+  const handleCreateInternship = async () => {
+    if (!formData.title) {
+      toast.error('Please provide a title for the internship');
+      return;
+    }
+
+    try {
+      const payload = {
+        ...formData,
+        requirements: formData.requirements.split('\n').filter(Boolean),
+        responsibilities: formData.responsibilities.split('\n').filter(Boolean),
+        // Ensure dates are string
+        startDate: formData.startDate ? new Date(formData.startDate).toISOString() : undefined,
+        deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
+      };
+
+      await api.post('/internships', payload);
+
+      toast.success('Internship created successfully');
+      setCreateDialogOpen(false);
+      resetForm();
+      fetchInternships();
+    } catch (error) {
+      console.error('Failed to create internship:', error);
+      toast.error('Failed to create internship');
+    }
+  };
+
+  const handleEditInternship = async () => {
     if (!selectedInternship) return;
 
-    updateInternship(selectedInternship.id, {
-      title: formData.title,
-      description: formData.description,
-      department: formData.department,
-      location: formData.location,
-      duration: formData.duration,
-      startDate: formData.startDate,
-      deadline: formData.deadline || undefined,
-      requirements: formData.requirements.split('\n').filter(Boolean),
-      responsibilities: formData.responsibilities.split('\n').filter(Boolean),
-      stipend: formData.stipend || undefined,
-      slots: formData.slots,
-      status: formData.status,
-      updatedAt: new Date().toISOString(),
-    });
+    if (!formData.title) {
+      toast.error('Please provide a title for the internship');
+      return;
+    }
 
-    setInternships(getInternships());
-    setEditDialogOpen(false);
-    setSelectedInternship(null);
-    resetForm();
+    try {
+      const payload = {
+        ...formData,
+        requirements: formData.requirements.split('\n').filter(Boolean),
+        responsibilities: formData.responsibilities.split('\n').filter(Boolean),
+        // Ensure dates are string
+        startDate: formData.startDate ? new Date(formData.startDate).toISOString() : undefined,
+        deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
+      };
+
+      await api.put(`/internships/${selectedInternship.id}`, payload);
+
+      toast.success('Internship updated successfully');
+      setEditDialogOpen(false);
+      setSelectedInternship(null);
+      resetForm();
+      fetchInternships();
+    } catch (error) {
+      console.error('Failed to update internship:', error);
+      toast.error('Failed to update internship');
+    }
   };
 
-  const handleDeleteInternship = (internshipId: string) => {
+  const handleDeleteInternship = async (internshipId: string) => {
     if (confirm('Are you sure you want to delete this internship?')) {
-      deleteInternship(internshipId);
-      setInternships(getInternships());
+      try {
+        await api.delete(`/internships/${internshipId}`);
+        toast.success('Internship deleted successfully');
+        fetchInternships();
+      } catch (error) {
+        console.error('Failed to delete internship:', error);
+        toast.error('Failed to delete internship');
+      }
     }
   };
 
@@ -348,8 +394,8 @@ export default function Internships() {
       department: internship.department,
       location: internship.location,
       duration: internship.duration,
-      startDate: internship.startDate,
-      deadline: internship.deadline || '',
+      startDate: internship.startDate ? internship.startDate.split('T')[0] : '',
+      deadline: internship.deadline ? internship.deadline.split('T')[0] : '',
       requirements: internship.requirements.join('\n'),
       responsibilities: internship.responsibilities.join('\n'),
       stipend: internship.stipend || '',
@@ -360,6 +406,7 @@ export default function Internships() {
   };
 
   const handleApply = (internshipId: string) => {
+    // Navigate to apply page (which also needs refactoring)
     navigate(`/apply/${internshipId}`);
   };
 
@@ -370,10 +417,6 @@ export default function Internships() {
       case 'filled': return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
       case 'draft': return 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400';
     }
-  };
-
-  const getApplicationCount = (internshipId: string) => {
-    return getApplicationsByInternshipId(internshipId).length;
   };
 
   const filteredInternships = getFilteredInternships();
@@ -408,7 +451,7 @@ export default function Internships() {
                   <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                     Cancel
                   </Button>
-                  <Button onClick={handleCreateInternship} disabled={!formData.title || !formData.department}>
+                  <Button onClick={handleCreateInternship} disabled={!formData.title || !formData.department || !formData.description || !formData.duration}>
                     Create
                   </Button>
                 </DialogFooter>
@@ -423,11 +466,18 @@ export default function Internships() {
             placeholder="Search internships..."
             className="pl-10"
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setShowAllInternships(false);
+            }}
           />
         </div>
 
-        {filteredInternships.length === 0 ? (
+        {isLoading ? (
+          <div className="flex justify-center p-12">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : filteredInternships.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center">
               <Briefcase className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -441,9 +491,17 @@ export default function Internships() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {filteredInternships.map((internship) => (
-              <Card key={internship.id} className="hover:shadow-lg transition-shadow flex flex-col">
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {filteredInternships.slice(0, showAllInternships ? filteredInternships.length : 3).map((internship, index) => (
+                <Card 
+                  key={internship.id} 
+                  className={cn(
+                    "hover:shadow-lg transition-shadow flex flex-col",
+                    index >= 3 && "slide-in"
+                  )}
+                  style={index >= 3 ? { animationDelay: `${(index - 3) * 0.1}s` } : {}}
+                >
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
@@ -494,7 +552,7 @@ export default function Internships() {
                     )}
                   </div>
 
-                  {internship.requirements.length > 0 && (
+                  {internship.requirements && internship.requirements.length > 0 && (
                     <div>
                       <p className="text-sm font-medium mb-2">Requirements</p>
                       <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
@@ -518,7 +576,9 @@ export default function Internships() {
                   {isAdmin ? (
                     <>
                       <div className="text-sm text-muted-foreground">
-                        {getApplicationCount(internship.id)} applications
+                        {/* TODO: Add application count via API if needed */}
+                        {/* {getApplicationCount(internship.id)} applications */}
+                        Actions
                       </div>
                       <div className="flex gap-2">
                         <Button variant="outline" size="sm" onClick={() => openEditDialog(internship)}>
@@ -544,7 +604,15 @@ export default function Internships() {
                 </CardFooter>
               </Card>
             ))}
-          </div>
+            </div>
+            {filteredInternships.length > 3 && !showAllInternships && (
+              <div className="flex justify-center mt-8">
+                <Button onClick={() => setShowAllInternships(true)} size="lg">
+                  View All Internships ({filteredInternships.length - 3} more)
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
         {/* Edit Dialog */}

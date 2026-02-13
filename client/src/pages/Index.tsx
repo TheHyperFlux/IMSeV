@@ -18,20 +18,61 @@ import {
   Zap,
   MapPin,
   Calendar,
-  DollarSign
+  DollarSign,
+  Loader2
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { getInternships } from '@/lib/storage';
+import api from '@/lib/api';
 import { Internship } from '@/types';
+import { cn } from '@/lib/utils';
+
+// Inject slide-in animation styles
+if (typeof document !== 'undefined') {
+  const styleId = 'index-slide-in-animation';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      @keyframes slideIn {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      
+      .slide-in {
+        animation: slideIn 0.5s ease-out forwards;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
 
 const Index = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [internships, setInternships] = useState<Internship[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAllInternships, setShowAllInternships] = useState(false);
 
   useEffect(() => {
-    const allInternships = getInternships();
-    setInternships(allInternships.filter(i => i.status === 'open'));
+    const fetchInternships = async () => {
+      try {
+        setLoading(true);
+        const res = await api.get('/internships');
+        const allInternships: Internship[] = res.data.data;
+        setInternships(allInternships.filter(i => i.status === 'open'));
+      } catch (error) {
+        console.error('Error fetching internships:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchInternships();
   }, []);
 
   const handleApply = (internshipId: string) => {
@@ -204,7 +245,11 @@ const Index = () => {
             </p>
           </div>
 
-          {internships.length === 0 ? (
+          {loading ? (
+            <div className="flex justify-center p-8">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+          ) : internships.length === 0 ? (
             <Card className="max-w-2xl mx-auto">
               <CardContent className="py-12 text-center">
                 <Briefcase className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -218,83 +263,99 @@ const Index = () => {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {internships.map((internship) => (
-                <Card key={internship.id} className="flex flex-col hover:shadow-lg transition-shadow">
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <Badge variant={internship.status === 'open' ? 'default' : 'secondary'}>
-                        {internship.status === 'open' ? 'Open' : internship.status}
-                      </Badge>
-                      {internship.stipend && (
-                        <div className="flex items-center text-sm text-muted-foreground">
-                          <DollarSign className="h-4 w-4 mr-1" />
-                          {internship.stipend}
-                        </div>
-                      )}
-                    </div>
-                    <CardTitle className="text-xl mt-2">{internship.title}</CardTitle>
-                    <CardDescription className="line-clamp-2">
-                      {internship.description}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex-1 space-y-4">
-                    <div className="space-y-2 text-sm">
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Briefcase className="h-4 w-4" />
-                        <span>{internship.department}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <MapPin className="h-4 w-4" />
-                        <span>{internship.location}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Clock className="h-4 w-4" />
-                        <span>{internship.duration}</span>
-                      </div>
-                      {internship.deadline && (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Calendar className="h-4 w-4" />
-                          <span>Deadline: {new Date(internship.deadline).toLocaleDateString()}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="pt-2">
-                      <p className="text-xs text-muted-foreground mb-2">Requirements:</p>
-                      <div className="flex flex-wrap gap-1">
-                        {internship.requirements.slice(0, 3).map((req, index) => (
-                          <Badge key={index} variant="outline" className="text-xs">
-                            {req}
-                          </Badge>
-                        ))}
-                        {internship.requirements.length > 3 && (
-                          <Badge variant="outline" className="text-xs">
-                            +{internship.requirements.length - 3} more
-                          </Badge>
+            <>
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {internships.slice(0, showAllInternships ? internships.length : 3).map((internship, index) => (
+                  <Card 
+                    key={internship.id} 
+                    className={cn(
+                      "flex flex-col hover:shadow-lg transition-shadow",
+                      index >= 3 && "slide-in"
+                    )}
+                    style={index >= 3 ? { animationDelay: `${(index - 3) * 0.1}s` } : {}}
+                  >
+                    <CardHeader>
+                      <div className="flex items-start justify-between">
+                        <Badge variant={internship.status === 'open' ? 'default' : 'secondary'}>
+                          {internship.status === 'open' ? 'Open' : internship.status}
+                        </Badge>
+                        {internship.stipend && (
+                          <div className="flex items-center text-sm text-muted-foreground">
+                            <DollarSign className="h-4 w-4 mr-1" />
+                            {internship.stipend}
+                          </div>
                         )}
                       </div>
-                    </div>
+                      <CardTitle className="text-xl mt-2">{internship.title}</CardTitle>
+                      <CardDescription className="line-clamp-2">
+                        {internship.description}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="flex-1 space-y-4">
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Briefcase className="h-4 w-4" />
+                          <span>{internship.department}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <MapPin className="h-4 w-4" />
+                          <span>{internship.location}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Clock className="h-4 w-4" />
+                          <span>{internship.duration}</span>
+                        </div>
+                        {internship.deadline && (
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Calendar className="h-4 w-4" />
+                            <span>Deadline: {new Date(internship.deadline).toLocaleDateString()}</span>
+                          </div>
+                        )}
+                      </div>
 
-                    <div className="flex items-center justify-between pt-2 text-sm">
-                      <span className="text-muted-foreground">
-                        {internship.slots - internship.filledSlots} of {internship.slots} slots available
-                      </span>
+                      <div className="pt-2">
+                        <p className="text-xs text-muted-foreground mb-2">Requirements:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {internship.requirements.slice(0, 3).map((req, index) => (
+                            <Badge key={index} variant="outline" className="text-xs">
+                              {req}
+                            </Badge>
+                          ))}
+                          {internship.requirements.length > 3 && (
+                            <Badge variant="outline" className="text-xs">
+                              +{internship.requirements.length - 3} more
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2 text-sm">
+                        <span className="text-muted-foreground">
+                          {internship.slots - internship.filledSlots} of {internship.slots} slots available
+                        </span>
+                      </div>
+                    </CardContent>
+                    <div className="p-6 pt-0">
+                      <Button
+                        className="w-full"
+                        onClick={() => handleApply(internship.id)}
+                        disabled={internship.filledSlots >= internship.slots}
+                      >
+                        {internship.filledSlots >= internship.slots ? 'Fully Booked' : 'Apply Now'}
+                        {internship.filledSlots < internship.slots && <ArrowRight className="ml-2 h-4 w-4" />}
+                      </Button>
                     </div>
-                  </CardContent>
-                  <div className="p-6 pt-0">
-                    <Button
-                      className="w-full"
-                      onClick={() => handleApply(internship.id)}
-                      disabled={internship.filledSlots >= internship.slots}
-                    >
-                      {internship.filledSlots >= internship.slots ? 'Fully Booked' : 'Apply Now'}
-                      {internship.filledSlots < internship.slots && <ArrowRight className="ml-2 h-4 w-4" />}
-                    </Button>
-                  </div>
-                </Card>
-              ))}
-            </div>
+                  </Card>
+                ))}
+              </div>
+              {internships.length > 3 && !showAllInternships && (
+                <div className="flex justify-center mt-8">
+                  <Button onClick={() => setShowAllInternships(true)} size="lg" variant="outline">
+                    View All ({internships.length - 3} more opportunities)
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </section>

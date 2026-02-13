@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -10,27 +10,14 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { 
-  getApplications, 
-  updateApplication, 
-  updateUser,
-  getUserById,
-  generateId,
-  addActivityLog,
-  addNotification,
-  getGroups,
-  getInternshipById,
-  updateInternship,
-  addChat
-} from '@/lib/storage';
-import { Application, ApplicationStatus, Group } from '@/types';
-import { 
-  Search, 
-  Eye, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
+import api from '@/lib/api';
+import { Application, ApplicationStatus, Group, Internship } from '@/types';
+import {
+  Search,
+  Eye,
+  CheckCircle,
+  XCircle,
+  Clock,
   Filter,
   Mail,
   Phone,
@@ -38,7 +25,8 @@ import {
   Briefcase,
   GraduationCap,
   PauseCircle,
-  UsersRound
+  UsersRound,
+  Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -53,7 +41,10 @@ const statusColors: Record<ApplicationStatus, string> = {
 
 export default function Applications() {
   const { user } = useAuth();
-  const [applications, setApplications] = useState<Application[]>(getApplications());
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [internships, setInternships] = useState<Internship[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [selectedApp, setSelectedApp] = useState<Application | null>(null);
@@ -62,16 +53,46 @@ export default function Applications() {
   const [notes, setNotes] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
 
-  const groups = getGroups();
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [appsRes, groupsRes, internshipsRes] = await Promise.all([
+        api.get('/applications'),
+        api.get('/groups'),
+        api.get('/internships')
+      ]);
+      setApplications(appsRes.data.data);
+      setGroups(groupsRes.data.data);
+      setInternships(internshipsRes.data.data);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      toast.error('Failed to fetch applications');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchData();
+    }
+  }, [user]);
 
   const filteredApplications = applications.filter(app => {
-    const matchesSearch = 
+    const matchesSearch =
       app.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       app.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       app.preferredDepartment.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || app.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  const getInternshipTitle = (internshipId: any) => {
+    if (!internshipId) return 'Unknown';
+    const id = typeof internshipId === 'string' ? internshipId : (internshipId.id || internshipId._id || (internshipId.toString && internshipId.toString()));
+    const internship = internships.find(i => i.id === id);
+    return internship ? internship.title : 'Unknown';
+  };
 
   const handleViewApplication = (app: Application) => {
     setSelectedApp(app);
@@ -88,100 +109,45 @@ export default function Applications() {
     processStatusChange(appId, newStatus);
   };
 
-  const processStatusChange = (appId: string, newStatus: ApplicationStatus, groupId?: string) => {
-    updateApplication(appId, { 
-      status: newStatus, 
-      notes,
-      reviewedBy: user?.id,
-      reviewedAt: new Date().toISOString(),
-      assignedGroupId: groupId,
-    });
-
-    const app = applications.find(a => a.id === appId);
-    if (app) {
-      // If accepted, update user role to intern and assign to group
+  const processStatusChange = async (appId: string, newStatus: ApplicationStatus, groupId?: string) => {
+    try {
       if (newStatus === 'accepted') {
-        updateUser(app.userId, { 
-          role: 'intern',
-          assignedGroupId: groupId,
+        // Use server-side accept endpoint to perform onboarding atomically
+        await api.post(`/applications/${appId}/accept`, {
+          groupId: groupId || undefined,
+          notes,
         });
+      } else {
+        const updateData: any = {
+          status: newStatus,
+          notes,
+          reviewedBy: user?.id,
+          reviewedAt: new Date().toISOString(),
+        };
 
-        // Update internship filled slots
-        if (app.internshipId) {
-          const internship = getInternshipById(app.internshipId);
-          if (internship) {
-            updateInternship(app.internshipId, {
-              filledSlots: internship.filledSlots + 1,
-            });
-          }
-        }
-
-        // If assigned to a group, add user to group members
         if (groupId) {
-          const group = groups.find(g => g.id === groupId);
-          if (group && !group.memberIds.includes(app.userId)) {
-            const updatedMembers = [...group.memberIds, app.userId];
-            // Update group in storage
-            const allGroups = getGroups();
-            const groupIndex = allGroups.findIndex(g => g.id === groupId);
-            if (groupIndex !== -1) {
-              allGroups[groupIndex].memberIds = updatedMembers;
-              localStorage.setItem('ims_groups', JSON.stringify(allGroups));
-
-              // Create group chat if doesn't exist
-              if (!group.chatId) {
-                const chatId = generateId();
-                addChat({
-                  id: chatId,
-                  type: 'group',
-                  name: group.name,
-                  participantIds: updatedMembers,
-                  groupId: group.id,
-                  createdAt: new Date().toISOString(),
-                });
-                allGroups[groupIndex].chatId = chatId;
-                localStorage.setItem('ims_groups', JSON.stringify(allGroups));
-              }
-            }
-          }
+          updateData.assignedGroupId = groupId;
         }
+
+        await api.put(`/applications/${appId}`, updateData);
       }
 
-      // Add notification
-      addNotification({
-        id: generateId(),
-        userId: app.userId,
-        title: `Application ${newStatus.replace('_', ' ')}`,
-        message: newStatus === 'accepted' 
-          ? `Congratulations! Your application for ${app.preferredDepartment} has been accepted. Welcome aboard!`
-          : `Your application for ${app.preferredDepartment} has been ${newStatus.replace('_', ' ')}.`,
-        type: newStatus === 'accepted' ? 'success' : newStatus === 'rejected' ? 'error' : 'info',
-        isRead: false,
-        createdAt: new Date().toISOString(),
-        link: newStatus === 'accepted' ? '/dashboard' : '/my-application',
-      });
+      toast.success(`Application ${newStatus.replace('_', ' ')}`);
+      fetchData();
+      setViewDialogOpen(false);
+      setAcceptDialogOpen(false);
+      setSelectedGroupId('');
 
-      addActivityLog({
-        id: generateId(),
-        userId: user?.id || '',
-        action: `application_${newStatus}`,
-        details: `Application from ${app.name} marked as ${newStatus}`,
-        timestamp: new Date().toISOString(),
-        resourceType: 'application',
-        resourceId: appId,
-      });
+    } catch (error: any) {
+      console.error('Error updating application:', error);
+      toast.error('Failed to update application status');
     }
-
-    setApplications(getApplications());
-    setViewDialogOpen(false);
-    setAcceptDialogOpen(false);
-    setSelectedGroupId('');
-    toast.success(`Application ${newStatus.replace('_', ' ')}`);
   };
 
   const handleAcceptWithGroup = () => {
     if (!selectedApp) return;
-    processStatusChange(selectedApp.id, 'accepted', selectedGroupId || undefined);
+    const gid = selectedGroupId === 'none' ? undefined : (selectedGroupId || undefined);
+    processStatusChange(selectedApp.id, 'accepted', gid);
   };
 
   return (
@@ -237,7 +203,11 @@ export default function Applications() {
             </div>
           </CardHeader>
           <CardContent>
-            {filteredApplications.length === 0 ? (
+            {loading ? (
+              <div className="flex justify-center p-8">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : filteredApplications.length === 0 ? (
               <div className="text-center py-12">
                 <p className="text-muted-foreground">No applications found.</p>
               </div>
@@ -255,41 +225,38 @@ export default function Applications() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredApplications.map((app) => {
-                      const internship = app.internshipId ? getInternshipById(app.internshipId) : null;
-                      return (
-                        <TableRow key={app.id}>
-                          <TableCell>
-                            <div>
-                              <p className="font-medium">{app.name}</p>
-                              <p className="text-sm text-muted-foreground">{app.email}</p>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            {internship?.title || 'N/A'}
-                          </TableCell>
-                          <TableCell>{app.preferredDepartment}</TableCell>
-                          <TableCell>
-                            {new Date(app.appliedAt).toLocaleDateString()}
-                          </TableCell>
-                          <TableCell>
-                            <Badge className={statusColors[app.status]}>
-                              {app.status.replace('_', ' ')}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleViewApplication(app)}
-                            >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
+                    {filteredApplications.map((app) => (
+                      <TableRow key={app.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-medium">{app.name}</p>
+                            <p className="text-sm text-muted-foreground">{app.email}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {getInternshipTitle(app.internshipId)}
+                        </TableCell>
+                        <TableCell>{app.preferredDepartment}</TableCell>
+                        <TableCell>
+                          {new Date(app.appliedAt).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={statusColors[app.status]}>
+                            {app.status.replace('_', ' ')}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleViewApplication(app)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            View
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               </div>
@@ -306,7 +273,7 @@ export default function Applications() {
                 Review the application and update its status
               </DialogDescription>
             </DialogHeader>
-            
+
             {selectedApp && (
               <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
@@ -332,14 +299,19 @@ export default function Applications() {
                     </p>
                     <p className="font-medium">{selectedApp.preferredDepartment}</p>
                   </div>
-                  <div className="space-y-1">
-                    <p className="text-sm text-muted-foreground flex items-center gap-1">
-                      <Calendar className="h-3 w-3" /> Available From
-                    </p>
-                    <p className="font-medium">
-                      {new Date(selectedApp.availableFrom).toLocaleDateString()}
-                    </p>
-                  </div>
+                  {selectedApp.availableFrom && (
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground flex items-center gap-1">
+                        <Calendar className="h-3 w-3" /> Available From
+                      </p>
+                      <p className="font-medium">
+                        {(() => {
+                          const d = new Date(selectedApp.availableFrom);
+                          return isNaN(d.getTime()) ? selectedApp.availableFrom : d.toLocaleDateString();
+                        })()}
+                      </p>
+                    </div>
+                  )}
                   <div className="space-y-1">
                     <p className="text-sm text-muted-foreground">Duration</p>
                     <p className="font-medium">{selectedApp.duration}</p>
@@ -353,14 +325,16 @@ export default function Applications() {
                   <p className="text-sm bg-muted p-3 rounded-lg whitespace-pre-wrap">{selectedApp.education}</p>
                 </div>
 
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">Skills</p>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedApp.skills.map((skill, index) => (
-                      <Badge key={index} variant="secondary">{skill}</Badge>
-                    ))}
+                {selectedApp.skills && selectedApp.skills.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-sm text-muted-foreground">Skills</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedApp.skills.map((skill: string, index: number) => (
+                        <Badge key={index} variant="secondary">{skill}</Badge>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {selectedApp.experience && (
                   <div className="space-y-2">
@@ -436,7 +410,7 @@ export default function Applications() {
                 Optionally assign the applicant to a group for team collaboration and communication.
               </DialogDescription>
             </DialogHeader>
-            
+
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="group">Assign to Group (Optional)</Label>
@@ -445,7 +419,7 @@ export default function Applications() {
                     <SelectValue placeholder="Select a group..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No group</SelectItem>
+                    <SelectItem value="none">No group</SelectItem>
                     {groups.map((group) => (
                       <SelectItem key={group.id} value={group.id}>
                         <div className="flex items-center gap-2">

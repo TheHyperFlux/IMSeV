@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -10,18 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  getTasks,
-  addTask,
-  updateTask,
-  deleteTask,
-  getProjects,
-  getUsers,
-  getGroups,
-  generateId,
-  addActivityLog
-} from '@/lib/storage';
-import { Task, TaskStatus, TaskPriority } from '@/types';
+import api from '@/lib/api';
+import { Task, TaskStatus, TaskPriority, Project, User, Group } from '@/types';
 import {
   Plus,
   Edit,
@@ -29,10 +19,12 @@ import {
   CheckSquare,
   Search,
   Calendar,
-  User,
+  User as UserIcon,
   Flag,
-  Users
+  Users,
+  Loader2
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 const statusColors: Record<TaskStatus, string> = {
   todo: 'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400',
@@ -49,18 +41,17 @@ const priorityColors: Record<TaskPriority, string> = {
 };
 
 export default function Tasks() {
-  const { user } = useAuth();
-  const [tasks, setTasks] = useState<Task[]>(getTasks());
+  const { user: currentUser } = useAuth();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [activeTab, setActiveTab] = useState('all');
-
-  const projects = getProjects();
-  const users = getUsers();
-  const groups = getGroups();
-  const interns = users.filter(u => u.role === 'intern');
 
   const [formData, setFormData] = useState({
     title: '',
@@ -72,6 +63,70 @@ export default function Tasks() {
     groupId: '',
     dueDate: '',
   });
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [tasksRes, projectsRes, usersRes, groupsRes] = await Promise.all([
+        api.get('/tasks'),
+        api.get('/projects'),
+        api.get('/users'),
+        api.get('/groups')
+      ]);
+
+      let allTasks: Task[] = tasksRes.data.data;
+      const allProjects: Project[] = projectsRes.data.data;
+      const allUsers: User[] = usersRes.data.data;
+      const allGroups: Group[] = groupsRes.data.data;
+
+      setProjects(allProjects);
+      setUsers(allUsers);
+      setGroups(allGroups);
+
+      // Filter tasks based on role (mirroring previous logic)
+      if (currentUser) {
+        if (currentUser.role === 'admin') {
+          setTasks(allTasks);
+        } else if (currentUser.role === 'mentor') {
+          // Mentors see tasks they created, or assigned to their groups, or assigned to their managed interns
+          const managedGroups = allGroups.filter(g =>
+            g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
+          );
+          const managedGroupIds = managedGroups.map(g => g.id);
+          const managedInternIds = new Set(managedGroups.flatMap(g => g.memberIds));
+
+          const visibleTasks = allTasks.filter(task =>
+            task.createdBy === currentUser.id ||
+            (task.groupId && managedGroupIds.includes(task.groupId)) ||
+            (task.assigneeId && managedInternIds.has(task.assigneeId))
+          );
+          setTasks(visibleTasks);
+        } else {
+          // Interns only see tasks assigned to them or their groups
+          const userGroupIds = allGroups.filter(g => g.memberIds.includes(currentUser.id)).map(g => g.id);
+          const visibleTasks = allTasks.filter(task =>
+            task.assigneeId === currentUser.id ||
+            (task.groupId && userGroupIds.includes(task.groupId))
+          );
+          setTasks(visibleTasks);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error fetching data:', error);
+      toast.error('Failed to fetch tasks');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchData();
+    }
+  }, [currentUser]);
+
+  const interns = users.filter(u => u.role === 'intern');
 
   const resetForm = () => {
     setFormData({
@@ -89,31 +144,6 @@ export default function Tasks() {
   const getFilteredTasks = () => {
     let filtered = tasks;
 
-    // Filter by user role for non-admins/mentors
-    // Strict filter by user role
-    if (user && user.role !== 'admin') {
-      const userGroupIds = groups.filter(g => g.memberIds.includes(user.id)).map(g => g.id);
-
-      if (user.role === 'mentor') {
-        // Mentors see tasks they created, or assigned to their groups, or assigned to their managed interns
-        const managedGroups = groups.filter(g => g.adminIds.includes(user.id) || g.memberIds.includes(user.id));
-        const managedGroupIds = managedGroups.map(g => g.id);
-        const managedInternIds = new Set(managedGroups.flatMap(g => g.memberIds));
-
-        filtered = filtered.filter(task =>
-          task.createdBy === user.id ||
-          (task.groupId && managedGroupIds.includes(task.groupId)) ||
-          (task.assigneeId && managedInternIds.has(task.assigneeId))
-        );
-      } else {
-        // Interns only see tasks assigned to them or their groups
-        filtered = filtered.filter(task =>
-          task.assigneeId === user.id ||
-          (task.groupId && userGroupIds.includes(task.groupId))
-        );
-      }
-    }
-
     // Filter by search term
     if (searchTerm) {
       filtered = filtered.filter(task =>
@@ -124,7 +154,7 @@ export default function Tasks() {
 
     // Filter by tab
     if (activeTab === 'my') {
-      filtered = filtered.filter(task => task.assigneeId === user?.id);
+      filtered = filtered.filter(task => task.assigneeId === currentUser?.id);
     } else if (activeTab !== 'all') {
       filtered = filtered.filter(task => task.status === activeTab);
     }
@@ -132,45 +162,46 @@ export default function Tasks() {
     return filtered;
   };
 
-  const handleCreateTask = () => {
-    const newTask: Task = {
-      id: generateId(),
-      projectId: formData.projectId,
-      title: formData.title,
-      description: formData.description,
-      status: formData.status,
-      priority: formData.priority,
-      assigneeId: formData.assigneeId || undefined,
-      groupId: formData.groupId || undefined,
-      dueDate: formData.dueDate || undefined,
-      createdBy: user?.id || '',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+  const handleCreateTask = async () => {
+    try {
+      const newTask = {
+        title: formData.title,
+        description: formData.description,
+        projectId: formData.projectId,
+        status: formData.status,
+        priority: formData.priority,
+        assigneeId: formData.assigneeId || undefined,
+        groupId: formData.groupId || undefined,
+        dueDate: formData.dueDate || undefined,
+      };
 
-    addTask(newTask);
+      const res = await api.post('/tasks', newTask);
 
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'task_created',
-      details: `Created task: ${formData.title}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'task',
-      resourceId: newTask.id,
-    });
+      await api.post('/activity-logs', {
+        userId: currentUser?.id,
+        action: 'task_created',
+        details: `Created task: ${formData.title}`,
+        resourceType: 'task',
+        resourceId: res.data.data.id,
+      });
 
-    setTasks(getTasks());
-    setCreateDialogOpen(false);
-    resetForm();
+      toast.success('Task created successfully');
+      fetchData();
+      setCreateDialogOpen(false);
+      resetForm();
+
+    } catch (error: any) {
+      console.error('Error creating task:', error);
+      toast.error(error.response?.data?.error || 'Failed to create task');
+    }
   };
 
   const getAvailableInterns = () => {
-    if (user?.role === 'mentor') {
-      const groups = getGroups().filter(g =>
-        g.adminIds.includes(user.id) || g.memberIds.includes(user.id)
+    if (currentUser?.role === 'mentor') {
+      const relevantGroups = groups.filter(g =>
+        g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
       );
-      const memberIds = new Set(groups.flatMap(g => g.memberIds));
+      const memberIds = new Set(relevantGroups.flatMap(g => g.memberIds));
       return interns.filter(u => memberIds.has(u.id));
     }
     return interns;
@@ -178,52 +209,68 @@ export default function Tasks() {
 
   const availableInterns = getAvailableInterns();
 
-  const handleEditTask = () => {
+  const handleEditTask = async () => {
     if (!selectedTask) return;
 
-    updateTask(selectedTask.id, {
-      title: formData.title,
-      description: formData.description,
-      projectId: formData.projectId,
-      status: formData.status,
-      priority: formData.priority,
-      assigneeId: formData.assigneeId || undefined,
-      groupId: formData.groupId || undefined,
-      dueDate: formData.dueDate || undefined,
-      updatedAt: new Date().toISOString(),
-      completedAt: formData.status === 'completed' ? new Date().toISOString() : undefined,
-    });
+    try {
+      const updateData = {
+        title: formData.title,
+        description: formData.description,
+        projectId: formData.projectId,
+        status: formData.status,
+        priority: formData.priority,
+        assigneeId: formData.assigneeId || undefined,
+        groupId: formData.groupId || undefined,
+        dueDate: formData.dueDate || undefined,
+        completedAt: formData.status === 'completed' && selectedTask.status !== 'completed' ? new Date().toISOString() : undefined,
+      };
 
-    addActivityLog({
-      id: generateId(),
-      userId: user?.id || '',
-      action: 'task_updated',
-      details: `Updated task: ${formData.title}`,
-      timestamp: new Date().toISOString(),
-      resourceType: 'task',
-      resourceId: selectedTask.id,
-    });
+      await api.put(`/tasks/${selectedTask.id}`, updateData);
 
-    setTasks(getTasks());
-    setEditDialogOpen(false);
-    setSelectedTask(null);
-    resetForm();
-  };
+      await api.post('/activity-logs', {
+        userId: currentUser?.id,
+        action: 'task_updated',
+        details: `Updated task: ${formData.title}`,
+        resourceType: 'task',
+        resourceId: selectedTask.id,
+      });
 
-  const handleDeleteTask = (taskId: string) => {
-    if (confirm('Are you sure you want to delete this task?')) {
-      deleteTask(taskId);
-      setTasks(getTasks());
+      toast.success('Task updated successfully');
+      fetchData();
+      setEditDialogOpen(false);
+      setSelectedTask(null);
+      resetForm();
+
+    } catch (error: any) {
+      console.error('Error updating task:', error);
+      toast.error(error.response?.data?.error || 'Failed to update task');
     }
   };
 
-  const handleStatusChange = (taskId: string, newStatus: TaskStatus) => {
-    updateTask(taskId, {
-      status: newStatus,
-      updatedAt: new Date().toISOString(),
-      completedAt: newStatus === 'completed' ? new Date().toISOString() : undefined,
-    });
-    setTasks(getTasks());
+  const handleDeleteTask = async (taskId: string) => {
+    if (confirm('Are you sure you want to delete this task?')) {
+      try {
+        await api.delete(`/tasks/${taskId}`);
+        toast.success('Task deleted successfully');
+        fetchData();
+      } catch (error: any) {
+        console.error('Error deleting task:', error);
+        toast.error(error.response?.data?.error || 'Failed to delete task');
+      }
+    }
+  };
+
+  const handleStatusChange = async (taskId: string, newStatus: TaskStatus) => {
+    try {
+      await api.put(`/tasks/${taskId}`, {
+        status: newStatus,
+        completedAt: newStatus === 'completed' ? new Date().toISOString() : undefined
+      });
+      fetchData(); // Refresh to ensure sync
+    } catch (error: any) {
+      console.error('Error updating task status:', error);
+      toast.error(error.response?.data?.error || 'Failed to update task status');
+    }
   };
 
   const openEditDialog = (task: Task) => {
@@ -236,7 +283,7 @@ export default function Tasks() {
       priority: task.priority,
       assigneeId: task.assigneeId || '',
       groupId: task.groupId || '',
-      dueDate: task.dueDate || '',
+      dueDate: task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '',
     });
     setEditDialogOpen(true);
   };
@@ -256,7 +303,7 @@ export default function Tasks() {
     return assignee?.name || 'Unknown';
   };
 
-  const isAdminOrMentor = user?.role === 'admin' || user?.role === 'mentor';
+  const isAdminOrMentor = currentUser?.role === 'admin' || currentUser?.role === 'mentor';
   const filteredTasks = getFilteredTasks();
 
   return (
@@ -356,7 +403,7 @@ export default function Tasks() {
                       onValueChange={(value) => setFormData({ ...formData, assigneeId: value === "__unassigned__" ? '' : value, groupId: '' })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select assignee" />
+                        <SelectValue placeholder="Unassigned" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__unassigned__">Unassigned</SelectItem>
@@ -375,7 +422,7 @@ export default function Tasks() {
                       onValueChange={(value) => setFormData({ ...formData, groupId: value === "__nogroup__" ? '' : value, assigneeId: '' })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select group" />
+                        <SelectValue placeholder="No Group" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__nogroup__">No Group</SelectItem>
@@ -426,7 +473,11 @@ export default function Tasks() {
           </TabsList>
 
           <TabsContent value={activeTab} className="mt-6">
-            {filteredTasks.length === 0 ? (
+            {loading ? (
+              <div className="flex justify-center p-8">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+            ) : filteredTasks.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
                   <CheckSquare className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -456,7 +507,7 @@ export default function Tasks() {
                               {getProjectName(task.projectId)}
                             </span>
                             <span className="flex items-center gap-1">
-                              {task.groupId ? <Users className="h-3 w-3" /> : <User className="h-3 w-3" />}
+                              {task.groupId ? <Users className="h-3 w-3" /> : <UserIcon className="h-3 w-3" />}
                               {getAssigneeName(task.assigneeId, task.groupId)}
                             </span>
                             {task.dueDate && (
@@ -608,7 +659,7 @@ export default function Tasks() {
                     onValueChange={(value) => setFormData({ ...formData, assigneeId: value === "__unassigned__" ? '' : value, groupId: '' })}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Unassigned" />
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__unassigned__">Unassigned</SelectItem>

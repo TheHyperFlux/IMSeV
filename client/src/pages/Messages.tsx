@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -10,27 +10,21 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-  getChats,
-  getChatsByUserId,
-  getMessagesByChatId,
-  addMessage,
-  addChat,
-  getUsers,
-  generateId
-} from '@/lib/storage';
-import { Chat, Message } from '@/types';
+import api from '@/lib/api';
+import { Chat, Message, User } from '@/types';
 import {
   Send,
   Plus,
   MessageSquare,
   Users,
-  Search
+  Search,
+  Loader2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export default function Messages() {
-  const { user } = useAuth();
+  const { user: currentUser } = useAuth();
   const navigate = useNavigate();
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
@@ -40,91 +34,156 @@ export default function Messages() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [chatName, setChatName] = useState('');
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const users = getUsers().filter(u => u.id !== user?.id);
-
   useEffect(() => {
-    if (user?.role === 'applicant') {
+    if (currentUser?.role === 'applicant') {
       navigate('/');
     }
-  }, [user, navigate]);
+  }, [currentUser, navigate]);
+
+  const fetchChats = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/chats');
+      setChats(res.data.data);
+    } catch (error) {
+      console.error('Error fetching chats:', error);
+      toast.error('Failed to fetch chats');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const res = await api.get('/users');
+      // Filter out current user from potential chat partners
+      const allUsers: User[] = res.data.data;
+      setUsers(allUsers.filter(u => u.id !== currentUser?.id));
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    }
+  };
 
   useEffect(() => {
-    if (user) {
-      setChats(getChatsByUserId(user.id));
+    if (currentUser) {
+      fetchChats();
+      fetchUsers();
     }
-  }, [user]);
+  }, [currentUser]);
 
   useEffect(() => {
     if (selectedChat) {
-      setMessages(getMessagesByChatId(selectedChat.id));
+      fetchMessages(selectedChat.id);
     }
   }, [selectedChat]);
+
+  const fetchMessages = async (chatId: string) => {
+    try {
+      const res = await api.get(`/messages/${chatId}`);
+      setMessages(res.data.data);
+    } catch (error) {
+      console.error('Error fetching messages:', error);
+      toast.error('Failed to fetch messages');
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSendMessage = () => {
-    if (!newMessage.trim() || !selectedChat || !user) return;
+  const handleSendMessage = async () => {
+    if (!newMessage.trim() || !selectedChat || !currentUser) return;
 
-    const message: Message = {
-      id: generateId(),
-      chatId: selectedChat.id,
-      senderId: user.id,
-      content: newMessage.trim(),
-      timestamp: new Date().toISOString(),
-      isRead: false,
-    };
+    try {
+      await api.post('/messages', {
+        chatId: selectedChat.id,
+        content: newMessage.trim()
+      });
 
-    addMessage(message);
-    setMessages(getMessagesByChatId(selectedChat.id));
-    setChats(getChatsByUserId(user.id));
-    setNewMessage('');
+      fetchMessages(selectedChat.id);
+      fetchChats(); // Refresh chat list to update last message
+      setNewMessage('');
+    } catch (error) {
+      console.error('Error sending message:', error);
+      toast.error('Failed to send message');
+    }
   };
 
-  const handleCreateChat = () => {
-    if (selectedUsers.length === 0 || !user) return;
+  const handleCreateChat = async () => {
+    if (selectedUsers.length === 0 || !currentUser) return;
 
-    const isGroup = selectedUsers.length > 1;
-    const newChat: Chat = {
-      id: generateId(),
-      type: isGroup ? 'group' : 'direct',
-      name: isGroup ? chatName || 'Group Chat' : undefined,
-      participantIds: [...selectedUsers, user.id],
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      const isGroup = selectedUsers.length > 1;
 
-    addChat(newChat);
-    setChats(getChatsByUserId(user.id));
-    setSelectedChat(newChat);
-    setCreateDialogOpen(false);
-    setSelectedUsers([]);
-    setChatName('');
+      // Ensure current user is in participants
+      const participantIds = [...selectedUsers, currentUser.id];
+
+      const res = await api.post('/chats', {
+        type: isGroup ? 'group' : 'direct',
+        name: isGroup ? chatName || 'Group Chat' : undefined,
+        participantIds
+      });
+
+      const newChat = res.data.data;
+
+      fetchChats();
+      setSelectedChat(newChat);
+      setCreateDialogOpen(false);
+      setSelectedUsers([]);
+      setChatName('');
+    } catch (error: any) {
+      console.error('Error creating chat:', error);
+      toast.error(error.response?.data?.error || 'Failed to create chat');
+    }
   };
 
   const getChatName = (chat: Chat) => {
     if (chat.name) return chat.name;
     if (chat.type === 'direct') {
-      const otherUserId = chat.participantIds.find(id => id !== user?.id);
-      const otherUser = users.find(u => u.id === otherUserId);
-      return otherUser?.name || 'Unknown User';
+      const otherUser = chat.participantIds.find(p => {
+        if (typeof p === 'string') return p !== currentUser?.id;
+        return p.id !== currentUser?.id;
+      });
+
+      if (typeof otherUser === 'object') {
+        return otherUser.name || 'Unknown User';
+      }
+
+      // Fallback if we only have ID (shouldn't happen with updated backend)
+      const u = users.find(u => u.id === otherUser);
+      return u?.name || 'Unknown User';
     }
     return 'Group Chat';
   };
 
   const getChatAvatar = (chat: Chat) => {
     if (chat.type === 'direct') {
-      const otherUserId = chat.participantIds.find(id => id !== user?.id);
-      const otherUser = users.find(u => u.id === otherUserId);
-      return otherUser?.name?.charAt(0).toUpperCase() || '?';
+      const otherUser = chat.participantIds.find(p => {
+        if (typeof p === 'string') return p !== currentUser?.id;
+        return p.id !== currentUser?.id;
+      });
+
+      if (typeof otherUser === 'object') {
+        return otherUser.name?.charAt(0).toUpperCase() || '?';
+      }
+
+      const u = users.find(u => u.id === otherUser);
+      return u?.name?.charAt(0).toUpperCase() || '?';
     }
     return 'G';
   };
 
-  const getSenderName = (senderId: string) => {
-    if (senderId === user?.id) return 'You';
+  const getSenderName = (senderId: string | { id: string; name: string; avatar?: string }) => {
+    if (senderId === currentUser?.id || (typeof senderId === 'object' && senderId.id === currentUser?.id)) return 'You';
+
+    if (typeof senderId === 'object') {
+      return senderId.name || 'Unknown';
+    }
+
     const sender = users.find(u => u.id === senderId);
     return sender?.name || 'Unknown';
   };
@@ -229,7 +288,11 @@ export default function Messages() {
               </div>
 
               <ScrollArea className="flex-1">
-                {filteredChats.length === 0 ? (
+                {loading && chats.length === 0 ? (
+                  <div className="flex justify-center p-8">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                  </div>
+                ) : filteredChats.length === 0 ? (
                   <div className="p-4 text-center text-muted-foreground">
                     <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
                     <p className="text-sm">No conversations yet</p>
@@ -298,7 +361,8 @@ export default function Messages() {
                         </div>
                       ) : (
                         messages.map((message) => {
-                          const isOwn = message.senderId === user?.id;
+                          const senderId = typeof message.senderId === 'object' ? message.senderId.id : message.senderId;
+                          const isOwn = senderId === currentUser?.id;
                           return (
                             <div
                               key={message.id}

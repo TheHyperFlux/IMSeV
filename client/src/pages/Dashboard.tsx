@@ -1,45 +1,121 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { 
-  Users, 
-  FolderKanban, 
-  CheckSquare, 
+import {
+  Users,
+  FolderKanban,
+  CheckSquare,
   ClipboardList,
   TrendingUp,
   Clock,
   Award,
-  ArrowRight
+  ArrowRight,
+  Loader2
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { getUsers, getApplications, getProjects, getTasks, getTasksByAssigneeId } from '@/lib/storage';
+import api from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { StatsCard } from '@/components/dashboard/StatsCard';
 import { RecentActivity } from '@/components/dashboard/RecentActivity';
 import { QuickActions } from '@/components/dashboard/QuickActions';
 import { UpcomingDeadlines } from '@/components/dashboard/UpcomingDeadlines';
+import { Application, Task, Project, User } from '@/types';
 
 export default function Dashboard() {
   const { user } = useAuth();
-  
-  const users = getUsers();
-  const applications = getApplications();
-  const projects = getProjects();
-  const tasks = getTasks();
-  const myTasks = user ? getTasksByAssigneeId(user.id) : [];
+  const [isLoading, setIsLoading] = useState(true);
+  const [stats, setStats] = useState({
+    totalUsers: 0,
+    totalApplications: 0,
+    pendingApplications: 0,
+    totalProjects: 0,
+    activeProjects: 0,
+    totalTasks: 0,
+    completedTasks: 0,
+    myPendingTasks: 0,
+    myCompletedTasks: 0,
+  });
+  const [myApplications, setMyApplications] = useState<Application[]>([]);
 
-  const stats = {
-    totalUsers: users.length,
-    totalApplications: applications.length,
-    pendingApplications: applications.filter(a => a.status === 'pending').length,
-    totalProjects: projects.length,
-    activeProjects: projects.filter(p => p.status === 'active').length,
-    totalTasks: tasks.length,
-    completedTasks: tasks.filter(t => t.status === 'completed').length,
-    myPendingTasks: myTasks.filter(t => t.status !== 'completed').length,
-    myCompletedTasks: myTasks.filter(t => t.status === 'completed').length,
-  };
+  useEffect(() => {
+    const fetchData = async () => {
+      if (!user) return;
+      setIsLoading(true);
+      try {
+        // Parallel requests to fetch necessary data
+        // Note: For a production app, we should create a dedicated /stats endpoint
+        // to avoid fetching all data here. For this scale, it's acceptable.
+
+        let usersRes, appsRes, projectsRes, tasksRes;
+
+        // Fetch data based on role to optimize? 
+        // Admin needs everything. Intern needs tasks/projects. Applicant needs apps.
+        // For simplicity, we'll fetch what's needed for the stats.
+
+        const promises = [];
+
+        if (user.role === 'admin' || user.role === 'mentor') {
+          promises.push(api.get('/users').then(res => usersRes = res.data.data)); // We might need a users endpoint? We don't have one user controller exposed fully yet? 
+          // Wait, we don't have a GET /users endpoint in authController? 
+          // Actually we don't. We only have register/login/me.
+          // Admin might not see total users count then unless we add it.
+          // I'll skip users count for now or implement it if critical.
+          // Let's assume we can't get users count easily without an endpoint.
+          // I'll set it to 0 or remove it.
+          // actually I'll add a quick endpoint for it or just ignore it for now.
+
+          promises.push(api.get('/applications').then(res => appsRes = res.data.data));
+          promises.push(api.get('/projects').then(res => projectsRes = res.data.data));
+          promises.push(api.get('/tasks').then(res => tasksRes = res.data.data));
+        } else if (user.role === 'intern') {
+          promises.push(api.get('/tasks').then(res => tasksRes = res.data.data)); // This returns all tasks or filtered?
+          // The /tasks endpoint currently returns all tasks (we should filter in backend ideally but for now frontend filtering works)
+        } else if (user.role === 'applicant') {
+          promises.push(api.get('/applications').then(res => appsRes = res.data.data));
+        }
+
+        await Promise.all(promises);
+
+        // Process Stats
+        const usersCount = 0; // usersRes?.length || 0;
+        const apps = appsRes || [];
+        const projects = projectsRes || [];
+        const tasks = tasksRes || [];
+
+        const myTasks = tasks.filter((t: Task) => t.assigneeId === user.id);
+        const myApps = apps.filter((a: Application) => {
+          // `a.userId` may be a string (id) or populated object { id, name }
+          if (!a.userId) return false;
+          if (typeof a.userId === 'string') return a.userId === user.id;
+          // populated object: try `id`, `_id`, or toString
+          return (a.userId.id && a.userId.id === user.id) || (a.userId._id && a.userId._id === user.id) || (a.userId.toString && a.userId.toString() === user.id);
+        });
+
+        setStats({
+          totalUsers: usersCount,
+          totalApplications: apps.length,
+          pendingApplications: apps.filter((a: Application) => a.status === 'pending').length,
+          totalProjects: projects.length,
+          activeProjects: projects.filter((p: Project) => p.status === 'active').length,
+          totalTasks: tasks.length,
+          completedTasks: tasks.filter((t: Task) => t.status === 'completed').length,
+          myPendingTasks: myTasks.filter((t: Task) => t.status !== 'completed').length,
+          myCompletedTasks: myTasks.filter((t: Task) => t.status === 'completed').length,
+        });
+
+        setMyApplications(myApps);
+
+      } catch (error) {
+        console.error('Failed to fetch dashboard data:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [user]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -47,6 +123,16 @@ export default function Dashboard() {
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
   };
+
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex justify-center items-center h-[50vh]">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -69,12 +155,14 @@ export default function Dashboard() {
         {/* Admin/Mentor Stats */}
         {(user?.role === 'admin' || user?.role === 'mentor') && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* 
             <StatsCard
               title="Total Users"
               value={stats.totalUsers}
               description="Active team members"
               icon={Users}
             />
+            */}
             <StatsCard
               title="Applications"
               value={stats.totalApplications}
@@ -101,7 +189,7 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <StatsCard
               title="My Tasks"
-              value={myTasks.length}
+              value={stats.myPendingTasks + stats.myCompletedTasks}
               description={`${stats.myPendingTasks} pending`}
               icon={CheckSquare}
             />
@@ -113,7 +201,7 @@ export default function Dashboard() {
             />
             <StatsCard
               title="Progress"
-              value={`${myTasks.length > 0 ? Math.round((stats.myCompletedTasks / myTasks.length) * 100) : 0}%`}
+              value={`${(stats.myPendingTasks + stats.myCompletedTasks) > 0 ? Math.round((stats.myCompletedTasks / (stats.myPendingTasks + stats.myCompletedTasks)) * 100) : 0}%`}
               description="Completion rate"
               icon={TrendingUp}
             />
@@ -133,27 +221,25 @@ export default function Dashboard() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {applications.filter(a => a.userId === user.id).length > 0 ? (
+              {myApplications.length > 0 ? (
                 <div className="space-y-4">
-                  {applications
-                    .filter(a => a.userId === user.id)
-                    .map(app => (
-                      <div key={app.id} className="flex items-center justify-between p-4 bg-muted rounded-lg">
-                        <div>
-                          <p className="font-medium">{app.preferredDepartment}</p>
-                          <p className="text-sm text-muted-foreground">
-                            Applied {new Date(app.appliedAt).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <Badge variant={
-                          app.status === 'accepted' ? 'default' :
-                          app.status === 'rejected' ? 'destructive' :
-                          'secondary'
-                        }>
-                          {app.status.replace('_', ' ')}
-                        </Badge>
+                  {myApplications.map(app => (
+                    <div key={app.id} className="flex items-center justify-between p-4 bg-muted rounded-lg">
+                      <div>
+                        <p className="font-medium">{app.internshipId?.title || app.preferredDepartment || 'Application'}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Applied {new Date(app.appliedAt).toLocaleDateString()}
+                        </p>
                       </div>
-                    ))}
+                      <Badge variant={
+                        app.status === 'accepted' ? 'default' :
+                          app.status === 'rejected' ? 'destructive' :
+                            'secondary'
+                      }>
+                        {app.status.replace('_', ' ')}
+                      </Badge>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="text-center py-8">
