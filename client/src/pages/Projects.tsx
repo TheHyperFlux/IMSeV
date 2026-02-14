@@ -9,6 +9,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import api from '@/lib/api';
 import { Project, ProjectStatus, User, Group } from '@/types';
 import {
@@ -19,7 +21,8 @@ import {
   Calendar,
   Users,
   Search,
-  Loader2
+  Loader2,
+  Eye
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -48,7 +51,9 @@ export default function Projects() {
   const [searchTerm, setSearchTerm] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [selectedProjectDetail, setSelectedProjectDetail] = useState<Project | null>(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -61,6 +66,16 @@ export default function Projects() {
     internIds: [] as string[],
   });
 
+  const normalizeId = (value: unknown): string => {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object' && value !== null) {
+      const o = value as { id?: string; _id?: string };
+      return o.id || o._id || '';
+    }
+    return String(value);
+  };
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -70,31 +85,42 @@ export default function Projects() {
         api.get('/groups')
       ]);
 
-      let allProjects: Project[] = projectsRes.data.data;
-      const allUsers: User[] = usersRes.data.data;
-      const allGroups: Group[] = groupsRes.data.data;
+      const rawProjects = projectsRes.data?.data;
+      let allProjects: Project[] = Array.isArray(rawProjects) ? rawProjects : [];
+      const allUsers: User[] = Array.isArray(usersRes.data?.data) ? usersRes.data.data : [];
+      const allGroups: Group[] = Array.isArray(groupsRes.data?.data) ? groupsRes.data.data : [];
 
       setUsers(allUsers);
       setGroups(allGroups);
 
-      // Filter projects based on role
+      const norm = (v: unknown): string => {
+        if (v == null) return '';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'object' && v !== null) {
+          const o = v as { id?: string; _id?: string };
+          return o.id || o._id || '';
+        }
+        return String(v);
+      };
+
+      // Filter projects based on role (backend already filters; this guards client-side)
       if (currentUser) {
         if (currentUser.role === 'admin') {
           setProjects(allProjects);
         } else if (currentUser.role === 'mentor') {
           const mentorGroups = allGroups.filter(g =>
-            g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
+            (g.adminIds || []).some((id: unknown) => norm(id) === currentUser.id) ||
+            (g.memberIds || []).some((id: unknown) => norm(id) === currentUser.id)
           );
-          const groupIds = mentorGroups.map(g => g.id);
-
+          const groupIds = new Set(mentorGroups.map(g => g.id));
           const visibleProjects = allProjects.filter(p =>
-            p.mentorId === currentUser.id ||
-            (p.groupId && groupIds.includes(p.groupId))
+            norm(p.mentorId) === currentUser.id ||
+            (norm(p.groupId) && groupIds.has(norm(p.groupId)))
           );
           setProjects(visibleProjects);
         } else if (currentUser.role === 'intern') {
           const visibleProjects = allProjects.filter(p =>
-            p.internIds.includes(currentUser.id)
+            (p.internIds || []).some((id: unknown) => norm(id) === currentUser.id)
           );
           setProjects(visibleProjects);
         } else {
@@ -118,20 +144,28 @@ export default function Projects() {
 
   const mentors = users.filter(u => u.role === 'mentor' || u.role === 'admin');
 
-  // Filter interns based on role logic
-  const getAvailableInterns = () => {
-    const allInterns = users.filter(u => u.role === 'intern');
+  // All users with intern role (for display; filtering by group uses normalized IDs below)
+  const allInternsList = users.filter(u => u.role === 'intern');
+
+  // For mentor: show interns from their groups; for admin: show all interns. Use normalized IDs.
+  const getAvailableInterns = (): User[] => {
+    if (!allInternsList.length) return [];
+    if (currentUser?.role === 'admin') return allInternsList;
     if (currentUser?.role === 'mentor') {
       const relevantGroups = groups.filter(g =>
-        g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
+        (g.adminIds || []).some((id: unknown) => normalizeId(id) === currentUser.id) ||
+        (g.memberIds || []).some((id: unknown) => normalizeId(id) === currentUser.id)
       );
-      const memberIds = new Set(relevantGroups.flatMap(g => g.memberIds));
-      return allInterns.filter(u => memberIds.has(u.id));
+      const memberIds = new Set(
+        relevantGroups.flatMap(g => (g.memberIds || []).map((id: unknown) => normalizeId(id)))
+      );
+      if (memberIds.size === 0) return allInternsList; // Mentor with no groups: show all interns
+      return allInternsList.filter(u => memberIds.has(u.id));
     }
-    return allInterns; // Admins see all
+    return allInternsList;
   };
 
-  const interns = getAvailableInterns(); // Not used directly in form currently, but logic kept
+  const interns = getAvailableInterns();
 
   const resetForm = () => {
     setFormData({
@@ -238,26 +272,18 @@ export default function Projects() {
     }
   };
 
-  const normalizeId = (value: any): string => {
-    if (!value) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'object') {
-      return (value as any).id || (value as any)._id || '';
-    }
-    return String(value);
-  };
-
   const openEditDialog = (project: Project) => {
     setSelectedProject(project);
+    const internIdStrings = (project.internIds || []).map((id: unknown) => normalizeId(id)).filter(Boolean);
     setFormData({
-      name: project.name,
-      description: project.description,
-      department: project.department,
+      name: project.name || (project as any).title || '',
+      description: project.description || '',
+      department: project.department || '',
       status: project.status,
-      startDate: project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : '', // Format for date input
+      startDate: project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : '',
       endDate: project.endDate ? new Date(project.endDate).toISOString().split('T')[0] : '',
       mentorId: normalizeId(project.mentorId as any),
-      internIds: project.internIds,
+      internIds: internIdStrings,
     });
     setEditDialogOpen(true);
   };
@@ -288,13 +314,14 @@ export default function Projects() {
                   New Project
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-lg">
-                <DialogHeader>
+              <DialogContent className="w-[calc(100%-2rem)] max-w-lg max-h-[90vh] flex flex-col overflow-hidden sm:max-h-[85vh]">
+                <DialogHeader className="shrink-0">
                   <DialogTitle>Create New Project</DialogTitle>
                   <DialogDescription>
                     Add a new project for interns to work on
                   </DialogDescription>
                 </DialogHeader>
+                <div className="overflow-y-auto min-h-0 flex-1 pr-1 -mr-1 overscroll-contain">
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="name">Project Name *</Label>
@@ -314,7 +341,7 @@ export default function Projects() {
                       placeholder="Describe the project"
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="department">Department (optional)</Label>
                       <Input
@@ -348,7 +375,7 @@ export default function Projects() {
                       </Select>
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="startDate">Start Date</Label>
                       <Input
@@ -386,8 +413,53 @@ export default function Projects() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="space-y-2">
+                    <Label>Assign Interns (optional)</Label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className="w-full justify-between font-normal"
+                        >
+                          {formData.internIds.length === 0
+                            ? 'Select interns...'
+                            : `${formData.internIds.length} intern(s) selected`}
+                          <span className="opacity-50">▼</span>
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[200px] max-w-[min(320px,100vw-2rem)] p-0 z-[100]" align="start" sideOffset={8}>
+                        <div className="max-h-[220px] overflow-y-auto overflow-x-hidden p-2" style={{ overscrollBehavior: 'contain' }}>
+                          <div className="space-y-2">
+                            {interns.length === 0 ? (
+                              <p className="text-sm text-muted-foreground py-3 px-1">No interns available. Add users with intern role in Users.</p>
+                            ) : (
+                              interns.map((intern) => (
+                                <div key={intern.id} className="flex items-center space-x-2 py-1">
+                                  <Checkbox
+                                    id={`create-intern-${intern.id}`}
+                                    checked={formData.internIds.includes(intern.id)}
+                                    onCheckedChange={(checked) => {
+                                      if (checked) {
+                                        setFormData(prev => ({ ...prev, internIds: [...prev.internIds, intern.id] }));
+                                      } else {
+                                        setFormData(prev => ({ ...prev, internIds: prev.internIds.filter(id => id !== intern.id) }));
+                                      }
+                                    }}
+                                  />
+                                  <label htmlFor={`create-intern-${intern.id}`} className="text-sm font-medium leading-none cursor-pointer flex-1 truncate">
+                                    {intern.name}
+                                  </label>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 </div>
-                <DialogFooter>
+                </div>
+                <DialogFooter className="shrink-0 border-t pt-4 mt-4">
                   <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                     Cancel
                   </Button>
@@ -403,11 +475,11 @@ export default function Projects() {
           )}
         </div>
 
-        <div className="relative">
+        <div className="relative w-full max-w-md">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search projects..."
-            className="pl-10 max-w-md"
+            className="pl-10 w-full"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -467,29 +539,39 @@ export default function Projects() {
 
                   <div className="flex items-center gap-2 text-sm">
                     <Users className="h-4 w-4 text-muted-foreground" />
-                    <span>{project.internIds.length} intern(s) assigned</span>
+                    <span>{(project.internIds || []).length} intern(s) assigned</span>
                   </div>
 
-                  {isAdminOrMentor && (
-                    <div className="flex gap-2 pt-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1"
-                        onClick={() => openEditDialog(project)}
-                      >
-                        <Edit className="h-4 w-4 mr-1" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDeleteProject(project.id)}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    </div>
-                  )}
+                  <div className="flex gap-2 pt-2 flex-wrap">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { setSelectedProjectDetail(project); setDetailDialogOpen(true); }}
+                    >
+                      <Eye className="h-4 w-4 mr-1" />
+                      View details
+                    </Button>
+                    {isAdminOrMentor && (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => openEditDialog(project)}
+                        >
+                          <Edit className="h-4 w-4 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDeleteProject(project.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -498,13 +580,14 @@ export default function Projects() {
 
         {/* Edit Dialog */}
         <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
+          <DialogContent className="w-[calc(100%-2rem)] max-w-lg max-h-[90vh] flex flex-col overflow-hidden sm:max-h-[85vh]">
+            <DialogHeader className="shrink-0">
               <DialogTitle>Edit Project</DialogTitle>
               <DialogDescription>
                 Update project details and assignments
               </DialogDescription>
             </DialogHeader>
+            <div className="overflow-y-auto min-h-0 flex-1 pr-1 -mr-1 overscroll-contain">
             <div className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="edit-name">Project Name</Label>
@@ -522,7 +605,7 @@ export default function Projects() {
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Department (optional)</Label>
                   <Input
@@ -555,7 +638,7 @@ export default function Projects() {
                   </Select>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Start Date</Label>
                   <Input
@@ -591,8 +674,53 @@ export default function Projects() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>Assign Interns</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-between font-normal"
+                    >
+                      {formData.internIds.length === 0
+                        ? 'Select interns...'
+                        : `${formData.internIds.length} intern(s) selected`}
+                      <span className="opacity-50">▼</span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[200px] max-w-[min(320px,100vw-2rem)] p-0 z-[100]" align="start" sideOffset={8}>
+                    <div className="max-h-[220px] overflow-y-auto overflow-x-hidden p-2" style={{ overscrollBehavior: 'contain' }}>
+                      <div className="space-y-2">
+                        {interns.length === 0 ? (
+                          <p className="text-sm text-muted-foreground py-3 px-1">No interns available. Add users with intern role in Users.</p>
+                        ) : (
+                          interns.map((intern) => (
+                            <div key={intern.id} className="flex items-center space-x-2 py-1">
+                              <Checkbox
+                                id={`edit-intern-${intern.id}`}
+                                checked={formData.internIds.includes(intern.id)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setFormData(prev => ({ ...prev, internIds: [...prev.internIds, intern.id] }));
+                                  } else {
+                                    setFormData(prev => ({ ...prev, internIds: prev.internIds.filter(id => id !== intern.id) }));
+                                  }
+                                }}
+                              />
+                              <label htmlFor={`edit-intern-${intern.id}`} className="text-sm font-medium leading-none cursor-pointer flex-1 truncate">
+                                {intern.name}
+                              </label>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
             </div>
-            <DialogFooter>
+            </div>
+            <DialogFooter className="shrink-0 border-t pt-4 mt-4">
               <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
                 Cancel
               </Button>
@@ -600,6 +728,65 @@ export default function Projects() {
                 Save Changes
               </Button>
             </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Project detail dialog: admin, assigned mentor, and assigned interns can view */}
+        <Dialog open={detailDialogOpen} onOpenChange={setDetailDialogOpen}>
+          <DialogContent className="max-w-lg">
+            {selectedProjectDetail && (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="text-xl">
+                    {selectedProjectDetail.name || (selectedProjectDetail as any).title || 'Project'}
+                  </DialogTitle>
+                  <DialogDescription>
+                    {selectedProjectDetail.department || 'No department'}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-muted-foreground">Description</Label>
+                    <p className="mt-1 text-sm">
+                      {selectedProjectDetail.description || 'No description provided.'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge className={statusColors[selectedProjectDetail.status]}>
+                      {selectedProjectDetail.status.replace('_', ' ')}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    <span>Mentor: {getMentorName(selectedProjectDetail.mentorId)}</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <Calendar className="h-4 w-4 text-muted-foreground" />
+                    <span>
+                      {selectedProjectDetail.startDate
+                        ? new Date(selectedProjectDetail.startDate).toLocaleDateString()
+                        : '—'}
+                      {selectedProjectDetail.endDate &&
+                        ` – ${new Date(selectedProjectDetail.endDate).toLocaleDateString()}`}
+                    </span>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Assigned interns</Label>
+                    <ul className="mt-1 text-sm list-disc list-inside">
+                      {(selectedProjectDetail.internIds || []).length === 0 ? (
+                        <li className="text-muted-foreground">None assigned</li>
+                      ) : (
+                        (selectedProjectDetail.internIds || []).map((id: unknown) => {
+                          const idStr = typeof id === 'string' ? id : (id as any)?.id || (id as any)?._id || '';
+                          const u = users.find(uu => uu.id === idStr);
+                          return <li key={idStr}>{u?.name || 'Unknown'}</li>;
+                        })
+                      )}
+                    </ul>
+                  </div>
+                </div>
+              </>
+            )}
           </DialogContent>
         </Dialog>
       </div>

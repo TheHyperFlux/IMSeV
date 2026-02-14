@@ -1,4 +1,11 @@
+const mongoose = require('mongoose');
 const Project = require('../models/Project');
+
+const toObjectId = (id) => {
+    if (!id) return undefined;
+    if (mongoose.Types.ObjectId.isValid(id)) return new mongoose.Types.ObjectId(id);
+    return undefined;
+};
 
 // @desc    Get all projects
 // @route   GET /api/projects
@@ -6,12 +13,24 @@ const Project = require('../models/Project');
 exports.getProjects = async (req, res) => {
     try {
         let query;
+        const userIdStr = req.user.id || (req.user._id && req.user._id.toString());
+        const userObjectId = toObjectId(userIdStr);
 
-        // If intern, only show assigned projects
+        // If intern, only show projects they are assigned to (match string or ObjectId)
         if (req.user.role === 'intern') {
-            query = Project.find({ internIds: req.user.id });
+            query = Project.find({
+                $or: [
+                    { internIds: userIdStr },
+                    ...(userObjectId ? [{ internIds: userObjectId }] : [])
+                ]
+            });
         } else if (req.user.role === 'mentor') {
-            query = Project.find({ mentorId: req.user.id });
+            query = Project.find({
+                $or: [
+                    { mentorId: userIdStr },
+                    ...(userObjectId ? [{ mentorId: userObjectId }] : [])
+                ]
+            });
         } else {
             query = Project.find();
         }
@@ -39,13 +58,24 @@ exports.getProjects = async (req, res) => {
 
 // @desc    Get single project
 // @route   GET /api/projects/:id
-// @access  Private
+// @access  Private (admin, or assigned mentor, or assigned intern)
 exports.getProject = async (req, res) => {
     try {
         const project = await Project.findById(req.params.id);
 
         if (!project) {
             return res.status(404).json({ success: false, error: 'Project not found' });
+        }
+
+        const userIdStr = req.user.id || (req.user._id && req.user._id.toString());
+        const isAdmin = req.user.role === 'admin';
+        const isMentor = project.mentorId && (project.mentorId.toString() === userIdStr);
+        const isAssignedIntern = project.internIds && project.internIds.some(
+            id => id && id.toString() === userIdStr
+        );
+
+        if (!isAdmin && !isMentor && !isAssignedIntern) {
+            return res.status(403).json({ success: false, error: 'Not authorized to view this project' });
         }
 
         const obj = project.toObject();
