@@ -68,7 +68,11 @@ export default function DailyLogs() {
         api.get('/daily-logs'),
         api.get('/users')
       ]);
-      setLogs(logsRes.data.data);
+      // Recent log on top
+      const sortedLogs = (logsRes.data.data || []).sort(
+        (a: DailyLog, b: DailyLog) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+      setLogs(sortedLogs);
       setUsers(usersRes.data.data);
     } catch (error) {
       console.error('Error fetching data:', error);

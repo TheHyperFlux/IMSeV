@@ -65,24 +65,17 @@ export default function Groups() {
         api.get('/users')
       ]);
 
-      const allGroups: Group[] = groupsRes.data.data;
-      const allUsers: User[] = usersRes.data.data;
+      const allGroups: Group[] = Array.isArray(groupsRes.data?.data) ? groupsRes.data.data : [];
+      const allUsers: User[] = Array.isArray(usersRes.data?.data) ? usersRes.data.data : [];
 
       setUsers(allUsers);
 
       if (isAdmin) {
         setGroups(allGroups);
       } else {
-        // Mentors and Regular users only see groups they're part of
-        // But the API might already filter this? 
-        // Based on groupController.js (which I can't fully see but `getGroups` usually returns all if admin, or filtered?)
-        // Let's assume the API returns what the user is allowed to see.
-        // If the API returns all groups for everyone (which might be the case if protected but not scoped), 
-        // we might need to filter here. 
-        // Let's filter just in case to match previous logic.
+        // Mentors only see groups they're part of
         const visibleGroups = allGroups.filter(g =>
-          g.memberIds.includes(currentUser?.id || '') ||
-          g.adminIds.includes(currentUser?.id || '')
+          isUserInGroup(g, currentUser?.id || '')
         );
         setGroups(visibleGroups);
       }
@@ -90,10 +83,26 @@ export default function Groups() {
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Failed to fetch groups');
+      setGroups([]);
+      setUsers([]);
     } finally {
       setLoading(false);
     }
   };
+
+  const normalizeId = (value: unknown): string => {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object' && value !== null) {
+      const o = value as { id?: string; _id?: string };
+      return o.id || o._id || '';
+    }
+    return String(value);
+  };
+
+  const isUserInGroup = (group: Group, userId: string) =>
+    (group.memberIds || []).some(mid => normalizeId(mid) === userId) ||
+    (group.adminIds || []).some(aid => normalizeId(aid) === userId);
 
   useEffect(() => {
     if (currentUser) {
@@ -134,7 +143,7 @@ export default function Groups() {
         const createRes = await api.post('/chats', {
           type: 'group',
           name: chatGroup.name,
-          participantIds: chatGroup.memberIds,
+          participantIds: (chatGroup.memberIds || []).map(normalizeId).filter(Boolean),
           groupId: chatGroup.id
         });
         chat = createRes.data.data;
@@ -166,7 +175,7 @@ export default function Groups() {
     group.description.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const myGroups = groups.filter(g => g.memberIds.includes(currentUser?.id || ''));
+  const myGroups = groups.filter(g => isUserInGroup(g, currentUser?.id || ''));
 
   const handleCreateGroup = async () => {
     if (!formData.name.trim()) {
@@ -277,11 +286,13 @@ export default function Groups() {
 
   const openEditDialog = (group: Group) => {
     setSelectedGroup(group);
+    const memberIdStrings = (group.memberIds || []).map(normalizeId).filter(Boolean);
+    const adminIdStrings = (group.adminIds || []).map(normalizeId).filter(Boolean);
     setFormData({
       name: group.name,
       description: group.description,
-      memberIds: group.memberIds,
-      adminIds: group.adminIds,
+      memberIds: memberIdStrings,
+      adminIds: adminIdStrings,
     });
     setEditDialogOpen(true);
   };
@@ -311,16 +322,18 @@ export default function Groups() {
     }
   };
 
-  const getMemberNames = (memberIds: string[]) => {
+  const getMemberNames = (memberIds: (string | unknown)[]) => {
     return memberIds.map(id => {
-      const u = users.find(user => user.id === id);
+      const idStr = normalizeId(id);
+      const u = users.find(user => user.id === idStr);
       return u?.name || 'Unknown';
     });
   };
 
   const getSenderName = (senderId: string) => {
-    if (senderId === currentUser?.id) return 'You';
-    const sender = users.find(u => u.id === senderId);
+    const idStr = normalizeId(senderId);
+    if (idStr === currentUser?.id) return 'You';
+    const sender = users.find(u => u.id === idStr);
     return sender?.name || 'Unknown';
   };
 
@@ -342,7 +355,7 @@ export default function Groups() {
                 <div>
                   <h3 className="font-medium">{chatGroup.name}</h3>
                   <p className="text-sm text-muted-foreground">
-                    {chatGroup.memberIds.length} members
+                    {(chatGroup.memberIds || []).length} members
                   </p>
                 </div>
               </div>
@@ -593,7 +606,7 @@ export default function Groups() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredGroups.map((group) => {
-                  const isMember = group.memberIds.includes(currentUser?.id || '');
+                  const isMember = isUserInGroup(group, currentUser?.id || '');
                   return (
                     <Card key={group.id} className="hover:shadow-md transition-shadow">
                       <CardHeader>

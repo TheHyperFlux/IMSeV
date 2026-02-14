@@ -22,6 +22,7 @@ import NotFound from "./pages/NotFound";
 import DailyLogs from "./pages/DailyLogs";
 import Internships from "./pages/Internships";
 import ApplyInternship from "./pages/ApplyInternship";
+import MyApplication from "./pages/MyApplication";
 
 const queryClient = new QueryClient();
 
@@ -92,6 +93,11 @@ const App = () => (
             <Route path="/profile" element={
               <ProtectedRoute>
                 <Profile />
+              </ProtectedRoute>
+            } />
+            <Route path="/my-application" element={
+              <ProtectedRoute allowedRoles={['applicant']}>
+                <MyApplication />
               </ProtectedRoute>
             } />
             

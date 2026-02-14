@@ -74,41 +74,49 @@ export default function Tasks() {
         api.get('/groups')
       ]);
 
-      let allTasks: Task[] = tasksRes.data.data;
-      const allProjects: Project[] = projectsRes.data.data;
-      const allUsers: User[] = usersRes.data.data;
-      const allGroups: Group[] = groupsRes.data.data;
+      const rawTasks = tasksRes.data?.data;
+      let allTasks: Task[] = Array.isArray(rawTasks) ? rawTasks : [];
+      const allProjects: Project[] = Array.isArray(projectsRes.data?.data) ? projectsRes.data.data : [];
+      const allUsers: User[] = Array.isArray(usersRes.data?.data) ? usersRes.data.data : [];
+      const allGroups: Group[] = Array.isArray(groupsRes.data?.data) ? groupsRes.data.data : [];
 
       setProjects(allProjects);
       setUsers(allUsers);
       setGroups(allGroups);
 
-      // Filter tasks based on role (mirroring previous logic)
+      // normalizeId for comparing IDs (API may return string or object)
+      const norm = (v: unknown): string => {
+        if (v == null) return '';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'object' && v !== null) {
+          const o = v as { id?: string; _id?: string };
+          return o.id || o._id || '';
+        }
+        return String(v);
+      };
+
+      // Filter tasks based on role
       if (currentUser) {
         if (currentUser.role === 'admin') {
           setTasks(allTasks);
         } else if (currentUser.role === 'mentor') {
-          // Mentors see tasks they created, or assigned to their groups, or assigned to their managed interns
           const managedGroups = allGroups.filter(g =>
-            g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
+            (g.adminIds || []).some((id: unknown) => norm(id) === currentUser.id) ||
+            (g.memberIds || []).some((id: unknown) => norm(id) === currentUser.id)
           );
-          const managedGroupIds = managedGroups.map(g => g.id);
-          const managedInternIds = new Set(managedGroups.flatMap(g => g.memberIds));
-
+          const managedGroupIds = new Set(managedGroups.map(g => g.id));
+          const managedInternIds = new Set(
+            managedGroups.flatMap(g => (g.memberIds || []).map((id: unknown) => norm(id)))
+          );
           const visibleTasks = allTasks.filter(task =>
-            task.createdBy === currentUser.id ||
-            (task.groupId && managedGroupIds.includes(task.groupId)) ||
-            (task.assigneeId && managedInternIds.has(task.assigneeId))
+            norm(task.createdBy) === currentUser.id ||
+            (norm(task.groupId) && managedGroupIds.has(norm(task.groupId))) ||
+            (norm(task.assigneeId) && managedInternIds.has(norm(task.assigneeId)))
           );
           setTasks(visibleTasks);
         } else {
-          // Interns only see tasks assigned to them or their groups
-          const userGroupIds = allGroups.filter(g => g.memberIds.includes(currentUser.id)).map(g => g.id);
-          const visibleTasks = allTasks.filter(task =>
-            task.assigneeId === currentUser.id ||
-            (task.groupId && userGroupIds.includes(task.groupId))
-          );
-          setTasks(visibleTasks);
+          // Intern: backend already returns only tasks assigned to them or their groups; show all returned
+          setTasks(allTasks);
         }
       }
 
@@ -146,9 +154,10 @@ export default function Tasks() {
 
     // Filter by search term
     if (searchTerm) {
+      const term = searchTerm.toLowerCase();
       filtered = filtered.filter(task =>
-        task.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        task.description.toLowerCase().includes(searchTerm.toLowerCase())
+        task.title.toLowerCase().includes(term) ||
+        (task.description || '').toLowerCase().includes(term)
       );
     }
 
@@ -164,16 +173,20 @@ export default function Tasks() {
 
   const handleCreateTask = async () => {
     try {
-      const newTask = {
+      const newTask: any = {
         title: formData.title,
         description: formData.description,
-        projectId: formData.projectId,
         status: formData.status,
         priority: formData.priority,
         assigneeId: formData.assigneeId || undefined,
         groupId: formData.groupId || undefined,
         dueDate: formData.dueDate || undefined,
       };
+
+      // Only include projectId if a project is actually selected
+      if (formData.projectId) {
+        newTask.projectId = formData.projectId;
+      }
 
       const res = await api.post('/tasks', newTask);
 
@@ -213,10 +226,9 @@ export default function Tasks() {
     if (!selectedTask) return;
 
     try {
-      const updateData = {
+      const updateData: any = {
         title: formData.title,
         description: formData.description,
-        projectId: formData.projectId,
         status: formData.status,
         priority: formData.priority,
         assigneeId: formData.assigneeId || undefined,
@@ -224,6 +236,11 @@ export default function Tasks() {
         dueDate: formData.dueDate || undefined,
         completedAt: formData.status === 'completed' && selectedTask.status !== 'completed' ? new Date().toISOString() : undefined,
       };
+
+      // Only include projectId if set; avoid sending empty string
+      if (formData.projectId) {
+        updateData.projectId = formData.projectId;
+      }
 
       await api.put(`/tasks/${selectedTask.id}`, updateData);
 
@@ -273,12 +290,21 @@ export default function Tasks() {
     }
   };
 
+  const normalizeId = (value: any): string => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') {
+      return (value as any).id || (value as any)._id || '';
+    }
+    return String(value);
+  };
+
   const openEditDialog = (task: Task) => {
     setSelectedTask(task);
     setFormData({
       title: task.title,
       description: task.description,
-      projectId: task.projectId,
+      projectId: normalizeId(task.projectId as any),
       status: task.status,
       priority: task.priority,
       assigneeId: task.assigneeId || '',
@@ -288,18 +314,22 @@ export default function Tasks() {
     setEditDialogOpen(true);
   };
 
-  const getProjectName = (projectId: string) => {
-    const project = projects.find(p => p.id === projectId);
-    return project?.name || 'No Project';
+  const getProjectName = (projectId: any) => {
+    const id = normalizeId(projectId);
+    const project = projects.find(p => p.id === id);
+    if (!project) return 'No Project';
+    return project.name || (project as any).title || 'No Project';
   };
 
-  const getAssigneeName = (assigneeId?: string, groupId?: string) => {
-    if (groupId) {
-      const group = groups.find(g => g.id === groupId);
+  const getAssigneeName = (assigneeId?: string | unknown, groupId?: string | unknown) => {
+    const gid = normalizeId(groupId);
+    if (gid) {
+      const group = groups.find(g => g.id === gid);
       return group ? `Group: ${group.name}` : 'Unknown Group';
     }
-    if (!assigneeId) return 'Unassigned';
-    const assignee = users.find(u => u.id === assigneeId);
+    const aid = normalizeId(assigneeId);
+    if (!aid) return 'Unassigned';
+    const assignee = users.find(u => u.id === aid);
     return assignee?.name || 'Unknown';
   };
 
@@ -333,7 +363,7 @@ export default function Tasks() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="title">Task Title</Label>
+                    <Label htmlFor="title">Task Title *</Label>
                     <Input
                       id="title"
                       value={formData.title}
@@ -342,7 +372,7 @@ export default function Tasks() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="description">Description</Label>
+                    <Label htmlFor="description">Description *</Label>
                     <Textarea
                       id="description"
                       value={formData.description}
@@ -351,7 +381,7 @@ export default function Tasks() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="project">Project</Label>
+                    <Label htmlFor="project">Project *</Label>
                     <Select
                       value={formData.projectId}
                       onValueChange={(value) => setFormData({ ...formData, projectId: value })}
@@ -362,7 +392,7 @@ export default function Tasks() {
                       <SelectContent>
                         {projects.map((project) => (
                           <SelectItem key={project.id} value={project.id}>
-                            {project.name}
+                            {project.name || (project as any).title || 'Untitled Project'}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -397,7 +427,7 @@ export default function Tasks() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="assignee">Assign To (Individual)</Label>
+                    <Label htmlFor="assignee">Assign To (Individual) *</Label>
                     <Select
                       value={formData.assigneeId || "__unassigned__"}
                       onValueChange={(value) => setFormData({ ...formData, assigneeId: value === "__unassigned__" ? '' : value, groupId: '' })}
@@ -416,7 +446,7 @@ export default function Tasks() {
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="group">Or Assign To (Group)</Label>
+                    <Label htmlFor="group">Or Assign To (Group) *</Label>
                     <Select
                       value={formData.groupId || "__nogroup__"}
                       onValueChange={(value) => setFormData({ ...formData, groupId: value === "__nogroup__" ? '' : value, assigneeId: '' })}
@@ -442,7 +472,15 @@ export default function Tasks() {
                   <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                     Cancel
                   </Button>
-                  <Button onClick={handleCreateTask} disabled={!formData.title || !formData.projectId}>
+                  <Button
+                    onClick={handleCreateTask}
+                    disabled={
+                      !formData.title ||
+                      !formData.description ||
+                      !formData.projectId ||
+                      (!formData.assigneeId && !formData.groupId)
+                    }
+                  >
                     Create Task
                   </Button>
                 </DialogFooter>
@@ -601,7 +639,7 @@ export default function Tasks() {
                   <SelectContent>
                     {projects.map((project) => (
                       <SelectItem key={project.id} value={project.id}>
-                        {project.name}
+                        {project.name || (project as any).title || 'Untitled Project'}
                       </SelectItem>
                     ))}
                   </SelectContent>

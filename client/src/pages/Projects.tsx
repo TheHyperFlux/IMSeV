@@ -146,15 +146,18 @@ export default function Projects() {
     });
   };
 
-  const filteredProjects = projects.filter(project =>
-    project.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    project.department.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredProjects = projects.filter(project => {
+    const name = (project.name || '').toLowerCase();
+    const department = (project.department || '').toLowerCase();
+    const term = searchTerm.toLowerCase();
+
+    return name.includes(term) || department.includes(term);
+  });
 
   const handleCreateProject = async () => {
     try {
       const newProject = {
-        name: formData.name,
+        title: formData.name,
         description: formData.description,
         department: formData.department,
         status: formData.status,
@@ -235,6 +238,15 @@ export default function Projects() {
     }
   };
 
+  const normalizeId = (value: any): string => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') {
+      return (value as any).id || (value as any)._id || '';
+    }
+    return String(value);
+  };
+
   const openEditDialog = (project: Project) => {
     setSelectedProject(project);
     setFormData({
@@ -244,14 +256,15 @@ export default function Projects() {
       status: project.status,
       startDate: project.startDate ? new Date(project.startDate).toISOString().split('T')[0] : '', // Format for date input
       endDate: project.endDate ? new Date(project.endDate).toISOString().split('T')[0] : '',
-      mentorId: project.mentorId,
+      mentorId: normalizeId(project.mentorId as any),
       internIds: project.internIds,
     });
     setEditDialogOpen(true);
   };
 
-  const getMentorName = (mentorId: string) => {
-    const mentor = users.find(u => u.id === mentorId);
+  const getMentorName = (mentorId: any) => {
+    const id = normalizeId(mentorId);
+    const mentor = users.find(u => u.id === id);
     return mentor?.name || 'Unassigned';
   };
 
@@ -284,7 +297,7 @@ export default function Projects() {
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="name">Project Name</Label>
+                    <Label htmlFor="name">Project Name *</Label>
                     <Input
                       id="name"
                       value={formData.name}
@@ -293,7 +306,7 @@ export default function Projects() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="description">Description</Label>
+                    <Label htmlFor="description">Description *</Label>
                     <Textarea
                       id="description"
                       value={formData.description}
@@ -356,7 +369,7 @@ export default function Projects() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="mentor">Mentor</Label>
+                    <Label htmlFor="mentor">Mentor *</Label>
                     <Select
                       value={formData.mentorId}
                       onValueChange={(value) => setFormData({ ...formData, mentorId: value })}
@@ -378,7 +391,10 @@ export default function Projects() {
                   <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
                     Cancel
                   </Button>
-                  <Button onClick={handleCreateProject} disabled={!formData.name}>
+                  <Button
+                    onClick={handleCreateProject}
+                    disabled={!formData.name || !formData.mentorId}
+                  >
                     Create Project
                   </Button>
                 </DialogFooter>
@@ -421,7 +437,9 @@ export default function Projects() {
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div>
-                      <CardTitle className="text-lg">{project.name}</CardTitle>
+                      <CardTitle className="text-lg">
+                        {project.name || (project as any).title || 'Untitled Project'}
+                      </CardTitle>
                       <CardDescription>{project.department}</CardDescription>
                     </div>
                     <Badge className={statusColors[project.status]}>
