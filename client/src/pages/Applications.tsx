@@ -140,7 +140,9 @@ export default function Applications() {
 
     } catch (error: any) {
       console.error('Error updating application:', error);
-      toast.error('Failed to update application status');
+      console.error('Server response:', error.response?.data);
+      const serverMsg = error.response?.data?.error;
+      toast.error(serverMsg || 'Failed to update application status');
     }
   };
 

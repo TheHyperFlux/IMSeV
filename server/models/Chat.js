@@ -6,6 +6,11 @@ const chatSchema = new mongoose.Schema({
         enum: ['direct', 'group'],
         default: 'direct'
     },
+    // list of userIds who have deleted (hidden) this chat for themselves
+    deletedBy: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }],
     name: String, // For group chats
     participantIds: [{
         type: mongoose.Schema.Types.ObjectId,

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import api from '@/lib/api';
-import { Task, TaskStatus, TaskPriority, Project, User, Group } from '@/types';
+import { Task, TaskStatus, TaskPriority, User, Group } from '@/types';
 import {
   Plus,
   Edit,
@@ -43,7 +43,17 @@ const priorityColors: Record<TaskPriority, string> = {
 export default function Tasks() {
   const { user: currentUser } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
+  // track which tasks have been expanded for "read more" behavior
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+
+  const toggleTaskExpansion = (taskId: string) => {
+    setExpandedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,7 +66,6 @@ export default function Tasks() {
   const [formData, setFormData] = useState({
     title: '',
     description: '',
-    projectId: '',
     status: 'todo' as TaskStatus,
     priority: 'medium' as TaskPriority,
     assigneeId: '',
@@ -67,20 +76,17 @@ export default function Tasks() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [tasksRes, projectsRes, usersRes, groupsRes] = await Promise.all([
+      const [tasksRes, usersRes, groupsRes] = await Promise.all([
         api.get('/tasks'),
-        api.get('/projects'),
         api.get('/users'),
         api.get('/groups')
       ]);
 
       const rawTasks = tasksRes.data?.data;
       let allTasks: Task[] = Array.isArray(rawTasks) ? rawTasks : [];
-      const allProjects: Project[] = Array.isArray(projectsRes.data?.data) ? projectsRes.data.data : [];
       const allUsers: User[] = Array.isArray(usersRes.data?.data) ? usersRes.data.data : [];
       const allGroups: Group[] = Array.isArray(groupsRes.data?.data) ? groupsRes.data.data : [];
 
-      setProjects(allProjects);
       setUsers(allUsers);
       setGroups(allGroups);
 
@@ -140,7 +146,6 @@ export default function Tasks() {
     setFormData({
       title: '',
       description: '',
-      projectId: '',
       status: 'todo',
       priority: 'medium',
       assigneeId: '',
@@ -210,13 +215,7 @@ export default function Tasks() {
   };
 
   const getAvailableInterns = () => {
-    if (currentUser?.role === 'mentor') {
-      const relevantGroups = groups.filter(g =>
-        g.adminIds.includes(currentUser.id) || g.memberIds.includes(currentUser.id)
-      );
-      const memberIds = new Set(relevantGroups.flatMap(g => g.memberIds));
-      return interns.filter(u => memberIds.has(u.id));
-    }
+    // Admins and mentors can assign tasks to any intern
     return interns;
   };
 
@@ -304,7 +303,6 @@ export default function Tasks() {
     setFormData({
       title: task.title,
       description: task.description,
-      projectId: normalizeId(task.projectId as any),
       status: task.status,
       priority: task.priority,
       assigneeId: task.assigneeId || '',
@@ -312,13 +310,6 @@ export default function Tasks() {
       dueDate: task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '',
     });
     setEditDialogOpen(true);
-  };
-
-  const getProjectName = (projectId: any) => {
-    const id = normalizeId(projectId);
-    const project = projects.find(p => p.id === id);
-    if (!project) return 'No Project';
-    return project.name || (project as any).title || 'No Project';
   };
 
   const getAssigneeName = (assigneeId?: string | unknown, groupId?: string | unknown) => {
@@ -358,7 +349,7 @@ export default function Tasks() {
                 <DialogHeader>
                   <DialogTitle>Create New Task</DialogTitle>
                   <DialogDescription>
-                    Add a new task to a project
+                    Add a new task
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
@@ -381,41 +372,23 @@ export default function Tasks() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="project">Project *</Label>
+                    <Label htmlFor="priority">Priority</Label>
                     <Select
-                      value={formData.projectId}
-                      onValueChange={(value) => setFormData({ ...formData, projectId: value })}
+                      value={formData.priority}
+                      onValueChange={(value) => setFormData({ ...formData, priority: value as TaskPriority })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select project" />
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {projects.map((project) => (
-                          <SelectItem key={project.id} value={project.id}>
-                            {project.name || (project as any).title || 'Untitled Project'}
-                          </SelectItem>
-                        ))}
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                        <SelectItem value="urgent">Urgent</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="priority">Priority</Label>
-                      <Select
-                        value={formData.priority}
-                        onValueChange={(value) => setFormData({ ...formData, priority: value as TaskPriority })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="low">Low</SelectItem>
-                          <SelectItem value="medium">Medium</SelectItem>
-                          <SelectItem value="high">High</SelectItem>
-                          <SelectItem value="urgent">Urgent</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
                     <div className="space-y-2">
                       <Label htmlFor="dueDate">Due Date</Label>
                       <Input
@@ -477,7 +450,6 @@ export default function Tasks() {
                     disabled={
                       !formData.title ||
                       !formData.description ||
-                      !formData.projectId ||
                       (!formData.assigneeId && !formData.groupId)
                     }
                   >
@@ -536,14 +508,22 @@ export default function Tasks() {
                               {task.priority}
                             </Badge>
                           </div>
-                          <p className="text-sm text-muted-foreground line-clamp-1 mb-2">
+                          {/* description with optional clamping */}
+                          <p className={`text-sm text-muted-foreground mb-2 ${expandedTaskIds.has(task.id) ? '' : 'line-clamp-1'}`}>
                             {task.description || 'No description'}
                           </p>
+                          {/* show toggle when description is long */}
+                          {task.description && task.description.length > 100 && (
+                            <Button
+                              variant="link"
+                              size="sm"
+                              className="p-0 text-xs"
+                              onClick={() => toggleTaskExpansion(task.id)}
+                            >
+                              {expandedTaskIds.has(task.id) ? 'Show less' : 'Read more'}
+                            </Button>
+                          )}
                           <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
-                            <span className="flex items-center gap-1">
-                              <CheckSquare className="h-3 w-3" />
-                              {getProjectName(task.projectId)}
-                            </span>
                             <span className="flex items-center gap-1">
                               {task.groupId ? <Users className="h-3 w-3" /> : <UserIcon className="h-3 w-3" />}
                               {getAssigneeName(task.assigneeId, task.groupId)}
@@ -628,41 +608,23 @@ export default function Tasks() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Project</Label>
+                <Label>Status</Label>
                 <Select
-                  value={formData.projectId}
-                  onValueChange={(value) => setFormData({ ...formData, projectId: value })}
+                  value={formData.status}
+                  onValueChange={(value) => setFormData({ ...formData, status: value as TaskStatus })}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {projects.map((project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        {project.name || (project as any).title || 'Untitled Project'}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="todo">To Do</SelectItem>
+                    <SelectItem value="in_progress">In Progress</SelectItem>
+                    <SelectItem value="in_review">In Review</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Status</Label>
-                  <Select
-                    value={formData.status}
-                    onValueChange={(value) => setFormData({ ...formData, status: value as TaskStatus })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="todo">To Do</SelectItem>
-                      <SelectItem value="in_progress">In Progress</SelectItem>
-                      <SelectItem value="in_review">In Review</SelectItem>
-                      <SelectItem value="completed">Completed</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
                 <div className="space-y-2">
                   <Label>Priority</Label>
                   <Select

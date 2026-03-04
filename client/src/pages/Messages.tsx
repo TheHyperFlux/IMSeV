@@ -18,7 +18,8 @@ import {
   MessageSquare,
   Users,
   Search,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -88,6 +89,26 @@ export default function Messages() {
     } catch (error) {
       console.error('Error fetching messages:', error);
       toast.error('Failed to fetch messages');
+    }
+  };
+
+  const handleDeleteChat = async (chatId: string) => {
+    if (!chatId) return;
+    if (!confirm('Are you sure you want to delete this conversation? You will no longer see it.')) {
+      return;
+    }
+    try {
+      await api.delete(`/chats/${chatId}`);
+      toast.success('Conversation deleted');
+      // refresh list and clear selection if it was deleted
+      fetchChats();
+      if (selectedChat?.id === chatId) {
+        setSelectedChat(null);
+        setMessages([]);
+      }
+    } catch (error: any) {
+      console.error('Error deleting conversation:', error);
+      toast.error(error.response?.data?.error || 'Failed to delete conversation');
     }
   };
 
@@ -339,18 +360,23 @@ export default function Messages() {
             <div className="flex-1 flex flex-col">
               {selectedChat ? (
                 <>
-                  <div className="p-4 border-b flex items-center gap-3">
-                    <Avatar>
-                      <AvatarFallback className={selectedChat.type === 'group' ? 'bg-primary text-primary-foreground' : ''}>
-                        {selectedChat.type === 'group' ? <Users className="h-4 w-4" /> : getChatAvatar(selectedChat)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <h3 className="font-medium">{getChatName(selectedChat)}</h3>
-                      <p className="text-sm text-muted-foreground">
-                        {selectedChat.participantIds.length} participants
-                      </p>
+                  <div className="p-4 border-b flex items-center gap-3 justify-between">
+                    <div className="flex items-center gap-3">
+                      <Avatar>
+                        <AvatarFallback className={selectedChat.type === 'group' ? 'bg-primary text-primary-foreground' : ''}>
+                          {selectedChat.type === 'group' ? <Users className="h-4 w-4" /> : getChatAvatar(selectedChat)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div>
+                        <h3 className="font-medium">{getChatName(selectedChat)}</h3>
+                        <p className="text-sm text-muted-foreground">
+                          {selectedChat.participantIds.length} participants
+                        </p>
+                      </div>
                     </div>
+                    <Button variant="ghost" size="icon" onClick={() => handleDeleteChat(selectedChat.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
                   </div>
 
                   <ScrollArea className="flex-1 p-4">

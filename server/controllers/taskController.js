@@ -58,11 +58,6 @@ exports.createTask = async (req, res) => {
     try {
         req.body.createdBy = req.user.id;
 
-        // Normalize optional projectId: treat empty string or null as undefined
-        if (!req.body.projectId) {
-            delete req.body.projectId;
-        }
-
         // Business validation: only title, description and assignee/group are mandatory
         const { title, description, assigneeId, groupId } = req.body;
 
@@ -87,7 +82,6 @@ exports.createTask = async (req, res) => {
             });
         }
 
-        // Bypass Mongoose schema validators (which still expect projectId).
         // Convert refs to ObjectId so intern queries (assigneeId / groupId) match.
         const taskData = {
             title: req.body.title,
@@ -98,7 +92,6 @@ exports.createTask = async (req, res) => {
             createdBy: toObjectId(req.user.id),
             assigneeId: toObjectId(req.body.assigneeId),
             groupId: toObjectId(req.body.groupId),
-            projectId: toObjectId(req.body.projectId),
         };
         const insertResult = await Task.collection.insertOne(taskData);
         const task = await Task.findById(insertResult.insertedId);
@@ -133,12 +126,6 @@ exports.updateTask = async (req, res) => {
             }
         }
 
-        // Normalize optional projectId on updates
-        if (!req.body.projectId) {
-            delete req.body.projectId;
-        }
-
-        // Avoid schema validators complaining about optional projectId
         task = await Task.findByIdAndUpdate(
             req.params.id,
             req.body,

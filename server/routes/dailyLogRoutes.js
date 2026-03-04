@@ -2,7 +2,8 @@ const express = require('express');
 const {
     getDailyLogs,
     createDailyLog,
-    updateDailyLog
+    updateDailyLog,
+    deleteDailyLog
 } = require('../controllers/dailyLogController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -17,6 +18,7 @@ router
 
 router
     .route('/:id')
-    .put(updateDailyLog);
+    .put(updateDailyLog)
+    .delete(deleteDailyLog);
 
 module.exports = router;

@@ -21,6 +21,8 @@ router
     .route('/:id')
     .get(getApplication)
     .put(updateApplication);
-router.route('/:id/accept').post(acceptApplication);
+// only admins or mentors may accept applications
+router.route('/:id/accept')
+    .post(authorize('admin','mentor'), acceptApplication);
 
 module.exports = router;

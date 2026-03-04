@@ -11,7 +11,6 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 
 import Applications from "./pages/Applications";
-import Projects from "./pages/Projects";
 import Tasks from "./pages/Tasks";
 import Messages from "./pages/Messages";
 import Users from "./pages/Users";
@@ -48,11 +47,6 @@ const App = () => (
             <Route path="/applications" element={
               <ProtectedRoute allowedRoles={['admin', 'mentor']}>
                 <Applications />
-              </ProtectedRoute>
-            } />
-            <Route path="/projects" element={
-              <ProtectedRoute allowedRoles={['admin', 'mentor', 'intern']}>
-                <Projects />
               </ProtectedRoute>
             } />
             <Route path="/tasks" element={

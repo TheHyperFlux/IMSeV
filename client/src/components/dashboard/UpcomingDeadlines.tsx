@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import api from '@/lib/api';
-import { Task, Project } from '@/types';
+import { Task } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { format, isAfter, isBefore, addDays } from 'date-fns';
 import { Clock, AlertTriangle, Loader2 } from 'lucide-react';
@@ -33,14 +33,8 @@ export function UpcomingDeadlines() {
         const now = new Date();
         const twoWeeksFromNow = addDays(now, 14);
 
-        // Fetch tasks and projects in parallel
-        const [tasksRes, projectsRes] = await Promise.all([
-          api.get('/tasks'),
-          api.get('/projects')
-        ]);
-
+        const tasksRes = await api.get('/tasks');
         const allTasks: Task[] = tasksRes.data.data;
-        const allProjects: Project[] = projectsRes.data.data;
 
         // Filter tasks
         let relevantTasks = allTasks;
@@ -59,23 +53,6 @@ export function UpcomingDeadlines() {
                 type: 'task',
                 priority: task.priority,
                 isOverdue: isBefore(dueDate, now)
-              });
-            }
-          }
-        });
-
-        // Filter projects
-        // Assuming everyone can see projects or filter if needed
-        allProjects.forEach(project => {
-          if (project.endDate && project.status !== 'completed') {
-            const endDate = new Date(project.endDate);
-            if (isBefore(endDate, twoWeeksFromNow)) {
-              items.push({
-                id: project.id,
-                title: project.name,
-                dueDate: project.endDate,
-                type: 'project',
-                isOverdue: isBefore(endDate, now)
               });
             }
           }

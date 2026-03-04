@@ -46,7 +46,6 @@ const navItems: NavItem[] = [
   { label: 'Internships', href: '/internships', icon: Briefcase },
   { label: 'Applications', href: '/applications', icon: ClipboardList, roles: ['admin', 'mentor'] },
   { label: 'Profile Details', href: '/profile', icon: UserCircle },
-  { label: 'Projects', href: '/projects', icon: FolderKanban, roles: ['admin', 'mentor', 'intern'] },
   { label: 'Tasks', href: '/tasks', icon: CheckSquare, roles: ['admin', 'mentor', 'intern'] },
   { label: 'Daily Logs', href: '/daily-logs', icon: BookOpen, roles: ['admin', 'mentor', 'intern'] },
   { label: 'Messages', href: '/messages', icon: MessageSquare, roles: ['admin', 'mentor', 'intern'] },

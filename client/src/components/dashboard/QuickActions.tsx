@@ -10,6 +10,7 @@ import {
   ClipboardList,
   UserPlus 
 } from 'lucide-react';
+import { CheckSquare, BookOpen } from 'lucide-react';
 
 export function QuickActions() {
   const { user } = useAuth();
@@ -17,21 +18,21 @@ export function QuickActions() {
 
   const adminActions = [
     { icon: ClipboardList, label: 'Review Applications', path: '/applications' },
-    { icon: FolderPlus, label: 'Create Project', path: '/projects' },
+    { icon: CheckSquare, label: 'Create Task', path: '/tasks' },
     { icon: UserPlus, label: 'Manage Users', path: '/users' },
     { icon: Users, label: 'Manage Groups', path: '/groups' },
   ];
 
   const mentorActions = [
     { icon: ClipboardList, label: 'Review Applications', path: '/applications' },
-    { icon: FolderPlus, label: 'Create Project', path: '/projects' },
+    { icon: CheckSquare, label: 'Create Task', path: '/tasks' },
     { icon: MessageSquare, label: 'Messages', path: '/messages' },
     { icon: Users, label: 'Manage Groups', path: '/groups' },
   ];
 
   const internActions = [
-    { icon: FolderPlus, label: 'View Projects', path: '/projects' },
     { icon: ClipboardList, label: 'My Tasks', path: '/tasks' },
+    { icon: BookOpen, label: 'My Daily Logs', path: '/daily-logs' },
     { icon: MessageSquare, label: 'Messages', path: '/messages' },
   ];
 

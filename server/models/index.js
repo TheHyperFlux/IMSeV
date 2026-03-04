@@ -1,7 +1,6 @@
 const User = require('./User');
 const Internship = require('./Internship');
 const Application = require('./Application');
-const Project = require('./Project');
 const Task = require('./Task');
 const DailyLog = require('./DailyLog');
 const Group = require('./Group');
@@ -14,7 +13,6 @@ module.exports = {
     User,
     Internship,
     Application,
-    Project,
     Task,
     DailyLog,
     Group,

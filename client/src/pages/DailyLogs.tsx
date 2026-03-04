@@ -68,8 +68,13 @@ export default function DailyLogs() {
         api.get('/daily-logs'),
         api.get('/users')
       ]);
+      // make sure every log has an `id` field (mongoose returns _id)
+      const normalized: DailyLog[] = (logsRes.data.data || []).map((l: any) => ({
+        ...l,
+        id: l.id || l._id || '',
+      }));
       // Recent log on top
-      const sortedLogs = (logsRes.data.data || []).sort(
+      const sortedLogs = normalized.sort(
         (a: DailyLog, b: DailyLog) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
       setLogs(sortedLogs);
@@ -89,7 +94,8 @@ export default function DailyLogs() {
   }, [currentUser]);
 
   const internUsers = users.filter(u => u.role === 'intern');
-  const mentorsAndAdmins = users.filter(u => u.role === 'admin' || u.role === 'mentor');
+  // users the intern can share with (mentors and admins)
+  const shareableUsers = users.filter(u => u.role === 'mentor' || u.role === 'admin');
 
   const resetForm = () => {
     setFormData({
@@ -189,25 +195,20 @@ export default function DailyLogs() {
     }
   };
 
-  const handleDeleteLog = async (logId: string) => { // API does not currently have DELETE route for logs?
-    // Checking dailyLogRoutes.js again... it DOES NOT have delete route. 
-    // Wait, let me re-check dailyLogRoutes.js content from previous conversation.
-    // It has GET / POST on / and PUT on /:id. No DELETE.
-    // So I cannot implement delete unless I add it to backend.
-    // For now I will comment out delete functionality or remove the button, or add the route.
-    // Given the task is frontend integration, I should ideally add the route if it's missing but user asked for backend fixes earlier.
-    // I'll assume DELETE is not supported for now to match backend, or I can quickly add it.
-    // I will add the backend route for completeness as it's a small fix.
-    // But first, let's just show an error or remove the button.
-    // existing Groups.tsx had delete.
-    // I'll implement it and then add the route call, assuming I'll fix backend.
-
+  const handleDeleteLog = async (logId: string) => {
+    if (!logId) {
+      console.warn('Attempted to delete log without id:', logId);
+      toast.error('Unable to delete log – missing identifier');
+      return;
+    }
     if (confirm('Are you sure you want to delete this daily log?')) {
       try {
-        // await api.delete(`/daily-logs/${logId}`);
-        toast.error('Deletion not supported by backend yet');
+        await api.delete(`/daily-logs/${logId}`);
+        toast.success('Daily log deleted successfully');
+        fetchData();
       } catch (error: any) {
         console.error('Error deleting log:', error);
+        toast.error(error.response?.data?.error || 'Failed to delete daily log');
       }
     }
   };
@@ -548,12 +549,10 @@ export default function DailyLogs() {
                         <Edit className="h-4 w-4 mr-1" />
                         Edit
                       </Button>
-                      {/* 
                       <Button variant="ghost" size="sm" onClick={() => handleDeleteLog(log.id)}>
                         <Trash2 className="h-4 w-4 mr-1 text-destructive" />
                         Delete
-                      </Button> 
-                      */}
+                      </Button>
                     </div>
                   )}
                 </CardContent>
@@ -664,12 +663,12 @@ export default function DailyLogs() {
             </DialogHeader>
             <div className="space-y-4">
               <ScrollArea className="h-64 border rounded-lg p-2">
-                {mentorsAndAdmins.length === 0 ? (
+                {shareableUsers.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">
                     No mentors or admins available
                   </p>
                 ) : (
-                  mentorsAndAdmins.map((u) => (
+                  shareableUsers.map((u) => (
                     <div
                       key={u.id}
                       className="flex items-center space-x-2 p-2 hover:bg-muted rounded-lg"

@@ -113,7 +113,6 @@ export interface Project {
 
 export interface Task {
   id: string;
-  projectId: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -129,6 +128,7 @@ export interface Task {
 
 export interface DailyLog {
   id: string;
+  _id?: string; // sometimes coming from backend before normalization
   userId: string | { id: string; name: string };
   date: string;
   tasksCompleted: string;
@@ -160,6 +160,7 @@ export interface Chat {
   lastMessage?: string;
   lastMessageAt?: string;
   createdAt: string;
+  deletedBy?: string[]; // internal only, helps with client logic if needed
 }
 
 export interface Group {

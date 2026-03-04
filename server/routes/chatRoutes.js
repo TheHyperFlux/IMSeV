@@ -3,7 +3,8 @@ const {
     getChats,
     createChat,
     getMessages,
-    sendMessage
+    sendMessage,
+    deleteChatForUser
 } = require('../controllers/chatController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -14,6 +15,9 @@ router.use(protect);
 router.route('/chats')
     .get(getChats)
     .post(createChat);
+
+// allow marking a chat deleted for current user (soft-delete)
+router.route('/chats/:id').delete(deleteChatForUser);
 
 router.route('/messages/:chatId')
     .get(getMessages);

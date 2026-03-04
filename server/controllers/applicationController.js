@@ -102,64 +102,89 @@ exports.updateApplication = async (req, res) => {
 // @route   POST /api/applications/:id/accept
 // @access  Private (Admin/Mentor)
 exports.acceptApplication = async (req, res) => {
-    const session = await mongoose.startSession();
     try {
-        session.startTransaction();
+        // debug log
+        console.log('acceptApplication called:', {
+            params: req.params,
+            body: req.body,
+            user: { id: req.user.id, role: req.user.role }
+        });
 
-        const app = await Application.findById(req.params.id).session(session);
+        // validate the incoming application id
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, error: 'Invalid application ID' });
+        }
+
+        const app = await Application.findById(req.params.id);
         if (!app) {
-            await session.abortTransaction();
-            session.endSession();
             return res.status(404).json({ success: false, error: 'Application not found' });
+        }
+
+        // if groupId was provided, validate it now; reject bad values early
+        let groupId = req.body.groupId;
+        if (groupId !== undefined && groupId !== null && groupId !== '') {
+            if (!mongoose.Types.ObjectId.isValid(groupId)) {
+                return res.status(400).json({ success: false, error: 'Invalid group ID' });
+            }
+        } else {
+            groupId = undefined;
         }
 
         // Update application fields
         app.status = 'accepted';
-        if (req.body.notes) app.notes = req.body.notes;
+        if (req.body.notes !== undefined) app.notes = req.body.notes;
         app.reviewedBy = req.user.id;
         app.reviewedAt = new Date();
-        if (req.body.groupId) app.assignedGroupId = req.body.groupId;
-        await app.save({ session });
+        if (groupId) app.assignedGroupId = groupId;
+        await app.save();
 
         // Promote user to intern
-        const applicantId = app.userId;
-        const user = await User.findById(applicantId).session(session);
+        let applicantId = app.userId;
+        if (applicantId && typeof applicantId === 'object' && applicantId.toString) {
+            applicantId = applicantId.toString();
+        }
+
+        const user = await User.findById(applicantId);
         if (user) {
             user.role = 'intern';
-            if (req.body.groupId) user.assignedGroupId = req.body.groupId;
-            await user.save({ session });
+            if (groupId) user.assignedGroupId = groupId;
+            await user.save();
         }
 
         // Add to group members if needed
-        if (req.body.groupId) {
-            const group = await Group.findById(req.body.groupId).session(session);
+        if (groupId) {
+            const group = await Group.findById(groupId);
             if (group) {
                 const existing = (group.memberIds || []).map(m => m.toString());
                 if (!existing.includes(applicantId.toString())) {
                     group.memberIds = [...existing, applicantId];
-                    await group.save({ session });
+                    await group.save();
                 }
             }
         }
 
         // Increment internship filledSlots if possible
         if (app.internshipId) {
-            const internship = await Internship.findById(app.internshipId).session(session);
-            if (internship && typeof internship.filledSlots === 'number') {
-                internship.filledSlots = (internship.filledSlots || 0) + 1;
-                await internship.save({ session });
+            let internshipId = app.internshipId;
+            if (typeof internshipId === 'object' && internshipId.toString) {
+                internshipId = internshipId.toString();
+            }
+            if (mongoose.Types.ObjectId.isValid(internshipId)) {
+                const internship = await Internship.findById(internshipId);
+                if (internship && typeof internship.filledSlots === 'number') {
+                    internship.filledSlots = (internship.filledSlots || 0) + 1;
+                    await internship.save();
+                }
             }
         }
 
-        await session.commitTransaction();
-        session.endSession();
-
-        const populated = await Application.findById(req.params.id).populate('userId', 'name email').populate('internshipId', 'title');
+        const populated = await Application.findById(req.params.id)
+            .populate('userId', 'name email')
+            .populate('internshipId', 'title');
         res.status(200).json({ success: true, data: populated });
     } catch (err) {
-        await session.abortTransaction();
-        session.endSession();
         console.error('Error in acceptApplication:', err);
-        res.status(500).json({ success: false, error: err.message });
+        const msg = process.env.NODE_ENV === 'production' ? err.message : err.stack;
+        res.status(500).json({ success: false, error: msg });
     }
 };

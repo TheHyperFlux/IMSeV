@@ -20,7 +20,6 @@ app.use(express.json());
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/internships', require('./routes/internshipRoutes'));
 app.use('/api/applications', require('./routes/applicationRoutes'));
-app.use('/api/projects', require('./routes/projectRoutes'));
 app.use('/api/tasks', require('./routes/taskRoutes'));
 app.use('/api/groups', require('./routes/groupRoutes'));
 app.use('/api/daily-logs', require('./routes/dailyLogRoutes'));
